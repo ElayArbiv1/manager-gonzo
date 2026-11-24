@@ -103,3 +103,16 @@ test('production refuses to run without SESSION_SECRET', async () => {
   assert.throws(() => makeCookie(checkRegistration({ name: 'x y', phone: '0541234567', code: 'gonzo' }), true), /SESSION_SECRET/);
   process.env.LOCAL_STORE_DIR = saved;
 });
+
+test('health, and managers can remove staff (not themselves)', async () => {
+  const m = client(), s = client();
+  assert.equal((await m('GET', '/api/health')).body.ok, true);
+  await m('POST', '/api/auth/register', { name: 'מנהל', phone: '0501112222', pin: '2468' });
+  await s('POST', '/api/auth/register', { name: 'עובד זמני', phone: '0549998888', code: 'gonzo' });
+  assert.equal((await s('DELETE', '/api/users/0501112222')).status, 403);
+  assert.equal((await m('DELETE', '/api/users/0501112222')).status, 400);
+  assert.equal((await m('DELETE', '/api/users/0549998888')).status, 200);
+  assert.ok(!(await m('GET', '/api/users')).body.some(u => u.phone === '0549998888'));
+  // the function's own path works as well as /api/*
+  assert.equal((await m('GET', '/.netlify/functions/api/auth/me')).body.user.role, 'manager');
+});

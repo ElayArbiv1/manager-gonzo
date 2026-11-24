@@ -19,13 +19,20 @@ export async function handle(req) {
 
 async function route(req) {
   const url = new URL(req.url);
-  const p = url.pathname.replace(/\/+$/, '');
+  // reached directly or through the /api/* rewrite to /.netlify/functions/api/*
+  const p = url.pathname.replace(/^\/\.netlify\/functions\/api/, '/api').replace(/\/+$/, '');
   const m = req.method;
-  const stores = await getStores();
+  let stores;
+  try { stores = await getStores(); } catch (e) { if (p !== '/api/health') throw e; stores = { data: { list: async () => { throw e; } } }; }
   const body = async () => { try { return await req.json(); } catch { return {}; } };
   const secure = url.protocol === 'https:';
 
   // ---- auth (no session needed) ----
+  if (p === '/api/health' && m === 'GET') {
+    let storage = 'ok';
+    try { await stores.data.list({ prefix: 'health/' }); } catch (e) { storage = e.name || 'error'; }
+    return json({ ok: storage === 'ok', storage, sessionSecret: Boolean(process.env.SESSION_SECRET), managers: Boolean(process.env.MANAGER_PHONES) });
+  }
   if (p === '/api/auth/config' && m === 'GET') {
     return json({ teamCode: Boolean(process.env.TEAM_CODE), managersConfigured: Boolean(process.env.MANAGER_PHONES) });
   }
@@ -46,6 +53,7 @@ async function route(req) {
 
   if (p === '/api/auth/me' && m === 'GET') return json({ user });
 
+  let r;
   // ---- users (managers) ----
   if (p === '/api/users' && m === 'GET') {
     manager();
@@ -55,8 +63,14 @@ async function route(req) {
     return json(users);
   }
 
+  if ((r = p.match(/^\/api\/users\/(\d+)$/)) && m === 'DELETE') {
+    manager();
+    if (r[1] === user.phone) throw new HttpError(400, 'אי אפשר למחוק את עצמך');
+    await stores.data.delete(`users/${r[1]}`);
+    return json({ ok: true });
+  }
+
   // ---- templates ----
-  let r;
   if (p === '/api/checklists/templates' && m === 'GET') return json(await cl.listTemplates(stores.data, { all: url.searchParams.get('all') === '1' && user.role === 'manager' }));
   if (p === '/api/checklists/templates' && m === 'POST') { manager(); return json(await cl.saveTemplate(stores.data, await body())); }
   if ((r = p.match(/^\/api\/checklists\/templates\/([\w-]+)$/))) {

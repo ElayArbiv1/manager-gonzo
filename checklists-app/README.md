@@ -29,6 +29,22 @@
 2. **ניהול רשימות ← ייבוא רשימה מקובץ**, ובוחרים את קובץ ה-JSON של הרשימות.
 3. שולחים לצוות את הקישור ואת קוד הצוות. בטלפון: **שיתוף ← הוספה למסך הבית**, והאפליקציה נפתחת כמו אפליקציה רגילה.
 
+## האתר הפעיל
+
+- כתובת: **https://gonzo-checklists.netlify.app**, האתר `gonzo-checklists` בחשבון Netlify.
+- משתני הסביבה (SESSION_SECRET, MANAGER_PHONES, MANAGER_PIN, TEAM_CODE) מוגדרים באתר. משנים אותם ב-Site configuration ← Environment variables, ואחרי שינוי צריך deploy חדש.
+- בדיקת תקינות: `/api/health` מחזיר `{"ok":true,...}`.
+
+### עדכון גרסה
+
+אחת משתי הדרכים:
+- **אוטומטי:** ב-Netlify ← Site configuration ← Build & deploy ← Link repository, לחבר את `manager-gonzo` עם Base directory `checklists-app`. מאז כל push לענף מעדכן את האתר.
+- **ידני:** מתוך התיקייה `checklists-app`:
+  ```bash
+  npm run build
+  npx netlify-cli deploy --prod --no-build --site=gonzo-checklists --dir=public --functions=netlify/functions
+  ```
+
 ## הרצה מקומית
 
 ```bash

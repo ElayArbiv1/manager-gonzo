@@ -48,8 +48,14 @@ views['cl-users'] = {
       ${table([
         { key: 'name', label: 'שם' }, { key: 'phone', label: 'טלפון', html: v => `<a href="tel:${esc(v)}" dir="ltr">${esc(v)}</a>` },
         { key: 'role', label: 'הרשאה', html: v => (v === 'manager' ? '<span class="pill good">מנהל</span>' : '<span class="pill">צוות</span>') },
-        { key: 'last_login', label: 'כניסה אחרונה', fmt: v => (v ? new Date(v).toLocaleString('he-IL') : '') }
-      ], users, { empty: 'עוד אף אחד לא נרשם' })}</div>`;
+        { key: 'last_login', label: 'כניסה אחרונה', fmt: v => (v ? new Date(v).toLocaleString('he-IL') : '') },
+        { key: 'phone', label: '', html: (v, u) => (u.role === 'manager' ? '' : `<button class="btn small danger" data-deluser="${esc(v)}">הסרה</button>`) }
+      ], users, { empty: 'עוד אף אחד לא נרשם' })}
+      <p class="muted" style="font-size:12px">הסרה מוחקת את העובד מהרשימה. מי שיש לו את קוד הצוות יכול להירשם שוב, אז כדי לחסום מחליפים את קוד הצוות.</p></div>`;
+    $$('[data-deluser]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('להסיר את העובד?')) return;
+      try { await api(`/api/users/${b.dataset.deluser}`, { method: 'DELETE' }); toast('הוסר'); render(); } catch (err) { toast(err.message); }
+    });
   }
 };
 
