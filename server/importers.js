@@ -131,12 +131,27 @@ function cellValue(v) {
   if (v == null) return '';
   if (v instanceof Date) return v;
   if (typeof v === 'object') {
-    if ('result' in v) return cellValue(v.result);           // formula
+    if (v.result != null) return cellValue(v.result);        // formula with a cached value
+    if ('formula' in v || 'sharedFormula' in v) return evalFormula(v.formula || ''); // no cached value
+    if ('result' in v) return '';
     if ('richText' in v) return v.richText.map(t => t.text).join('');
     if ('text' in v) return v.text;                          // hyperlink
     return String(v);
   }
   return v;
+}
+
+/**
+ * Some exports (e.g. Beecomm) write text as =CONCATENATE(" ", "name", " ") without a cached value.
+ * We can't run Excel, but string-only formulas can be resolved; anything else becomes empty.
+ */
+function evalFormula(f) {
+  if (/^\s*CONCATENATE\s*\(/i.test(f)) {
+    const parts = [...f.matchAll(/"((?:[^"]|"")*)"/g)].map(m => m[1].replace(/""/g, '"'));
+    return parts.join('').trim();
+  }
+  const lit = f.match(/^\s*"((?:[^"]|"")*)"\s*$/);
+  return lit ? lit[1].replace(/""/g, '"') : '';
 }
 
 /** Reports often start with a few title lines. Find the row that looks most like a header. */
@@ -361,10 +376,10 @@ function normalizeRows(kind, rows, mapping) {
 
 // ---------- commit ----------
 const COLUMNS = {
-  sales: ['date', 'hour', 'amount', 'orders', 'guests', 'discount', 'tips', 'channel', 'payment'],
+  sales: ['date', 'hour', 'amount', 'orders', 'guests', 'discount', 'tips', 'channel', 'payment', 'period_from'],
   items: ['date', 'item', 'category', 'qty', 'amount'],
   cancellations: ['date', 'time', 'item', 'qty', 'amount', 'employee', 'reason', 'approved_by'],
-  shifts: ['date', 'employee', 'role', 'start', 'end', 'hours', 'hourly_rate', 'cost', 'tips', 'tips_per_hour'],
+  shifts: ['date', 'employee', 'role', 'start', 'end', 'hours', 'hourly_rate', 'cost', 'tips', 'tips_per_hour', 'topup'],
   tips_daily: ['date', 'tips_per_hour', 'tips', 'hours']
 };
 
@@ -380,11 +395,13 @@ const DEFAULTS = {
  * Writes normalised rows. With replace=true (default) existing rows of the same kind+source
  * inside the file's date range are removed first, so re-uploading a week never double counts.
  */
-function commitImport(db, { kind, source, filename, rows, replace = true }) {
+function commitImport(db, { kind, source, filename, rows, replace = true, range = null }) {
   if (!COLUMNS[kind]) throw new Error('סוג ייבוא לא מוכר');
-  if (!rows.length) throw new Error('אין שורות תקינות לייבוא');
+  if (!rows.length && !range) throw new Error('אין שורות תקינות לייבוא');
   const dates = rows.map(r => r.date).sort();
-  const from = dates[0], to = dates[dates.length - 1];
+  // range: the period the report covers (e.g. a weekly report stored on one date) – replaced as a whole
+  const from = range?.from && (!dates.length || range.from < dates[0]) ? range.from : dates[0];
+  const to = range?.to && (!dates.length || range.to > dates[dates.length - 1]) ? range.to : dates[dates.length - 1];
   const cols = COLUMNS[kind];
 
   const tx = db.transaction(() => {
@@ -411,5 +428,5 @@ function commitImport(db, { kind, source, filename, rows, replace = true }) {
 
 module.exports = {
   KINDS, parseFile, guessMapping, detectKind, normalizeRows, commitImport,
-  toDate, toTime, toHours, toNumber, hoursBetween, normHeader, locateHeader, guessFieldMapping
+  toDate, toTime, toHours, toNumber, hoursBetween, normHeader, locateHeader, guessFieldMapping, cellValue
 };

@@ -128,10 +128,11 @@ views.dashboard = {
         <div class="card"><h3>מכירות לפי מקור</h3>${d.bySource.length ? '<div class="chart-box"><canvas id="c2"></canvas></div>' : '<div class="empty">אין מכירות</div>'}</div>
       </div>
       <div class="card" style="margin-top:16px"><h3>פירוט יומי</h3>
+        ${d.days.some(x => x.sales_period) ? `<div class="alert info" style="margin-bottom:10px">חלק מהמכירות הגיעו מדוח ביקום שבועי בלי פירוט יומי, ולכן הן מופיעות כסיכום ביום אחד (מסומן ב-Σ). הסיכום השבועי למעלה מדויק. ה"שעתי" לימים האלה מחושב מסך השירות בשבוע.</div>` : ''}
         ${table([
           { key: 'weekday', label: 'יום' },
           { key: 'date', label: 'תאריך', fmt: dmy },
-          { key: 'sales', label: 'מכירות', fmt: money },
+          { key: 'sales', label: 'מכירות', fmt: money, html: (v, r) => (r.sales_period ? (v ? `Σ ${esc(money(v))} <span class="muted" style="font-size:12px">(${esc(dm(r.sales_period.from))}–${esc(dm(r.sales_period.to))})</span>` : '<span class="muted">בסיכום</span>') : esc(money(v))) },
           { key: 'orders', label: 'הזמנות', fmt: num },
           { key: 'avg_ticket', label: 'ממוצע', fmt: money },
           { key: 'labor_hours', label: 'שעות', fmt: num },
@@ -230,7 +231,7 @@ views.labor = {
     const tot = d.days.reduce((a, x) => ({ hours: a.hours + x.hours, business_hours: a.business_hours + x.business_hours, tip_hours: a.tip_hours + x.tip_hours, tips: a.tips + x.tips, topup: a.topup + x.tip_topup, cost: a.cost + x.cost, sales_net: a.sales_net + x.sales_net }), { hours: 0, business_hours: 0, tip_hours: 0, tips: 0, topup: 0, cost: 0, sales_net: 0 });
     const tphDays = d.days.filter(x => x.tips_per_hour != null);
     const avgTph = tot.tip_hours && tphDays.length ? tphDays.reduce((a, x) => a + x.tips_per_hour * x.tip_hours, 0) / tphDays.reduce((a, x) => a + x.tip_hours, 0) : null;
-    const tphCell = (v, r) => (v == null ? '-' : `${esc(money(v))}${r.tips_per_hour_source === 'calculated' ? ' <span class="muted" title="חושב מהטיפים בדוח המכירות, כי אין שעתי מאפליקציית המשמרות">*</span>' : ''}`);
+    const tphCell = (v, r) => (v == null ? '-' : `${esc(money(v))}${r.tips_per_hour_source === 'calculated' ? ' <span class="muted" title="חושב מהטיפים בדוח המכירות, כי אין שעתי מאפליקציית המשמרות">*</span>' : r.tips_per_hour_source === 'calculated_period' ? ' <span class="muted" title="חושב מסך השירות בדוח ביקום השבועי חלקי שעות המלצרים והבר באותו שבוע">*Σ</span>' : ''}`);
     el.innerHTML = `
       ${d.missingRates.length ? `<div class="alert warn" style="margin-bottom:16px">לתפקידים הבאים עוד לא הוזנה עלות, ולכן הם מחושבים כ-0: ${d.missingRates.map(esc).join(', ')}. <a href="#employees">להזנת עלויות לפי תפקיד</a></div>` : ''}
       ${!d.minWage ? '<div class="alert info" style="margin-bottom:16px">כדי לחשב השלמה לשכר מינימום כשהשעתי נמוך, הזינו שכר מינימום לשעה ב<a href="#settings">הגדרות</a>.</div>' : ''}
@@ -245,16 +246,16 @@ views.labor = {
       </div>
       <div class="grid two" style="margin-top:16px">
         <div class="card"><h3>שעות ועלות לפי יום</h3><div class="chart-box"><canvas id="l1"></canvas></div></div>
-        <div class="card"><h3>לפי תפקיד</h3>${table([{ key: 'role', label: 'תפקיד' }, { key: 'pay_type', label: 'תשלום', fmt: v => ({ tips: 'מטיפים', shift: 'למשמרת', hourly: 'לשעה' }[v] || '-') }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות לעסק', fmt: money }], d.byRole)}</div>
+        <div class="card"><h3>לפי תפקיד</h3>${table([{ key: 'role', label: 'תפקיד' }, { key: 'pay_type', label: 'תשלום', fmt: v => ({ tips: 'מטיפים', shift: 'למשמרת', hourly: 'לשעה', file: 'מהדוח' }[v] || '-') }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות לעסק', fmt: money }], d.byRole)}</div>
       </div>
       <div class="card" style="margin-top:16px"><h3>שעתי יומי</h3>
         ${table([{ key: 'weekday', label: 'יום' }, { key: 'date', label: 'תאריך', fmt: dmy },
-          { key: 'tips_per_hour', label: 'שעתי', html: tphCell, cls: v => (d.minWage && v != null && v < d.minWage ? 'bad' : '') },
+          { key: 'tips_per_hour', label: 'שעתי', fmt: money, html: tphCell, cls: v => (d.minWage && v != null && v < d.minWage ? 'bad' : '') },
           { key: 'tip_hours', label: 'שעות מלצרים/בר', fmt: num }, { key: 'tips', label: 'טיפים', fmt: money },
           { key: 'business_hours', label: 'שעות עסק', fmt: num }, { key: 'tip_topup', label: 'השלמה', fmt: v => (v ? money(v) : '-') },
           { key: 'cost', label: 'עלות לעסק', fmt: money }, { key: 'sales_net', label: 'מכירות נטו', fmt: money }, { key: 'labor_pct', label: '% עבודה', fmt: pctf }],
           d.days, { foot: { weekday: 'סה״כ', tips_per_hour: avgTph, tip_hours: tot.tip_hours, tips: tot.tips, business_hours: tot.business_hours, tip_topup: tot.topup, cost: tot.cost, sales_net: tot.sales_net } })}
-        <p class="muted" style="font-size:12px;margin-bottom:0">שעתי = טיפים לשעה, כפי שמגיע מאפליקציית המשמרות. * = לא היה שעתי בדוח, ולכן חושב מהטיפים בדוח המכירות.</p>
+        <p class="muted" style="font-size:12px;margin-bottom:0">שעתי = טיפים לשעה, כפי שמגיע מאפליקציית המשמרות. * = לא היה שעתי בדוח, ולכן חושב מהטיפים בדוח המכירות. *Σ = חושב מסך השירות בדוח ביקום השבועי.</p>
       </div>
       <div class="card" style="margin-top:16px"><h3>לפי עובד</h3>
         ${table([{ key: 'employee', label: 'עובד' }, { key: 'role', label: 'תפקיד' }, { key: 'pay_type', label: 'תשלום', fmt: v => ({ tips: 'מטיפים', shift: 'לפי תפקיד (משמרת)', hourly: 'לפי תפקיד (שעה)', personal: 'שכר אישי', file: 'מהקובץ' }[v] || 'לא הוזן') }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות לעסק', fmt: money }], d.byEmployee)}
@@ -419,12 +420,42 @@ views.import = {
       fd.append('kind', $('#imp-kind').value);
       try {
         const p = await api('/api/import/preview', { method: 'POST', body: fd });
+        if (p.format) return showFormatPreview(p);
         if ((p.kind === 'shifts' || p.kind === 'tips_daily') && !$('#imp-kind').value) $('#imp-source').value = 'shift';
         showPreview(p, kinds);
       } catch (err) { toast(err.message, 5000); }
     }
   }
 };
+
+/** A recognised report (Beecomm workbook / ShiftOrganizer detailed report): show what's inside and import it as a whole. */
+function showFormatPreview(p) {
+  const box = $('#imp-preview');
+  const detail = x => (x.kind === 'shifts'
+    ? `${num(x.employees)} עובדים · ${num(x.rows)} משמרות · ${num(x.hours)} שעות · עלות ${money(x.cost)}${x.tips ? ` · טיפים ${money(x.tips)}` : ''}`
+    : x.kind === 'sales'
+      ? `${money(x.amount)} · ${num(x.orders)} הזמנות · ${num(x.guests)} סועדים · שירות ${money(x.tips)} · הנחות ${money(x.discount)}`
+      : `${num(x.rows)} פריטים · ${num(x.qty)} יחידות · ${money(x.amount)}`);
+  box.innerHTML = `
+    <div class="card" style="margin-top:16px">
+      <h3>✅ זוהה: ${esc(p.label)} <span class="pill">${esc(p.filename)}</span></h3>
+      <div class="muted" style="margin-bottom:10px">${p.range ? `${dmy(p.range.from)} עד ${dmy(p.range.to)}` : ''}${p.branch ? ` · ${esc(p.branch)}` : ''}</div>
+      <div class="stack" style="gap:8px">${p.parts.map(x => `<div class="alert info"><b>${esc(x.label)}:</b> ${detail(x)}</div>`).join('')}</div>
+      ${p.notes.length ? `<div class="stack" style="gap:8px;margin-top:8px">${p.notes.map(n => `<div class="alert warn">${esc(n)}</div>`).join('')}</div>` : ''}
+      <p class="muted" style="font-size:13px">הייבוא מחליף נתונים קודמים מאותו מקור בטווח התאריכים של הדוח, כך שאפשר להעלות את אותו שבוע שוב בלי כפילויות.</p>
+      <div class="row"><button class="btn primary" id="fmt-commit">ייבוא</button><button class="btn ghost" id="fmt-cancel">ביטול</button></div>
+    </div>`;
+  $('#fmt-cancel').onclick = () => { box.innerHTML = ''; };
+  $('#fmt-commit').onclick = async () => {
+    try {
+      const r = await api('/api/import/commit-format', { method: 'POST', body: { token: p.token } });
+      toast(`יובא: ${r.results.map(x => `${x.inserted} ${({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות' })[x.kind] || x.kind}`).join(', ')}`, 5000);
+      if (r.range) setRange(r.range.from, r.range.to);
+      location.hash = r.format === 'shiftorganizer' ? '#labor' : '#dashboard';
+    } catch (err) { toast(err.message, 5000); }
+  };
+  box.scrollIntoView({ behavior: 'smooth' });
+}
 
 function showPreview(p, kinds) {
   const box = $('#imp-preview');
@@ -502,7 +533,7 @@ views.employees = {
     el.innerHTML = `
       <div class="card">
         <h3>תפקידים ועלויות</h3>
-        <p class="muted" style="margin-top:0;font-size:13px">מלצרים וברמנים משולמים מהטיפים, ולכן הם לא נספרים בעלות העבודה של העסק. מה שנספר עבורם הוא רק השלמה לשכר מינימום, אם השעתי יצא נמוך ממנו. לשאר התפקידים מזינים את <b>העלות המלאה לעסק</b>, למשמרת או לשעה. תפקידים נוספים לכאן אוטומטית מדוח המשמרות.</p>
+        <p class="muted" style="margin-top:0;font-size:13px">מלצרים וברמנים משולמים מהטיפים, ולכן הם לא נספרים בעלות העבודה של העסק. מה שנספר עבורם הוא רק השלמה לשכר מינימום, אם השעתי יצא נמוך ממנו. לשאר התפקידים: אם דוח ShiftOrganizer כולל עמודת עלות, היא נלקחת ממנו ואין צורך להזין כאן. אחרת מזינים את <b>העלות המלאה לעסק</b>, למשמרת או לשעה. תפקידים נוספים לכאן אוטומטית מדוח המשמרות.</p>
         ${roles.length ? `<div class="table-wrap"><table class="edit-table"><thead><tr><th>תפקיד</th><th>אופן תשלום</th><th>עלות לעסק (₪)</th><th>משמרות ב-60 יום</th><th></th></tr></thead><tbody>
           ${roles.map(r => `<tr data-role="${r.id}">
             <td><b>${esc(r.name)}</b></td>
@@ -1049,7 +1080,7 @@ const STATUS_LABELS = {
   duplicate: ['כבר טופל', ''], error: ['שגיאה', 'bad'], running: ['רץ…', '']
 };
 const statusHtml = s => { const [t, c] = STATUS_LABELS[s] || [s, '']; return `<span class="pill ${c}">${esc(t)}</span>`; };
-const kindLabel = k => ({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות', tips_daily: 'שעתי' }[k] || k || '');
+const kindLabel = k => ({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות', tips_daily: 'שעתי', beecomm: 'דוח ביקום', shiftorganizer: 'דוח ShiftOrganizer' }[k] || k || '');
 
 function resultsHtml(results) {
   if (!results?.length) return '<span class="muted">לא נמצאו קבצים או טבלאות במייל</span>';

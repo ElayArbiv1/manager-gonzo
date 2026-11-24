@@ -12,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { openDb } = require('../server/db');
 const imp = require('../server/importers');
+const formats = require('../server/formats');
 
 async function main() {
   const args = process.argv.slice(2);
@@ -27,7 +28,16 @@ async function main() {
   }
   const db = openDb();
   for (const file of files) {
-    const parsed = await imp.parseFile(fs.readFileSync(file), path.basename(file));
+    const buffer = fs.readFileSync(file);
+    const known = !opt('kind') ? await formats.detectFormat(buffer, path.basename(file)) : null;
+    if (known) {
+      formats.commitFormat(db, known, { filename: path.basename(file) });
+      const parts = formats.describe(known).map(p => `${p.label}: ${p.rows} שורות`).join(' · ');
+      console.log(`${path.basename(file)}: ${known.label} · ${known.range?.from} עד ${known.range?.to} · ${parts}`);
+      for (const n of known.notes) console.log('  ' + n);
+      continue;
+    }
+    const parsed = await imp.parseFile(buffer, path.basename(file));
     const kind = opt('kind') || imp.detectKind(parsed.headers);
     const source = (opt('source') || (kind === 'shifts' ? 'shift' : 'manual')).toLowerCase();
     const mapping = imp.guessMapping(kind, parsed.headers);

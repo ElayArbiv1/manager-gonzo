@@ -5,6 +5,7 @@
  * detection, column mapping, normalisation and the safe "replace range" commit live here.
  */
 const imp = require('../importers');
+const formats = require('../formats');
 
 const SUPPORTED = /\.(csv|xlsx|xlsm|txt)$/i;
 
@@ -34,6 +35,14 @@ async function ingestFile(db, { buffer, filename, source, kind, dryRun }) {
   if (/\.pdf$/i.test(filename)) return { filename, status: 'skipped', reason: 'קובצי PDF עדיין לא נתמכים. נוסיף תמיכה אחרי שנראה דוגמה' };
   if (!SUPPORTED.test(filename)) return { filename, status: 'skipped', reason: 'סוג קובץ לא נתמך' };
   try {
+    const known = !kind ? await formats.detectFormat(buffer, filename) : null;
+    if (known) {
+      const parts = formats.describe(known);
+      const rows = parts.reduce((a, p) => a + p.rows, 0);
+      if (dryRun) return { filename, kind: known.format, status: 'ok', rows, from: known.range?.from, to: known.range?.to, parts, notes: known.notes };
+      formats.commitFormat(db, known, { filename });
+      return { filename, kind: known.format, status: 'imported', rows, from: known.range?.from, to: known.range?.to, parts, notes: known.notes };
+    }
     const parsed = await imp.parseFile(buffer, filename);
     return ingestTable(db, { ...parsed, source, kind, filename, dryRun });
   } catch (e) {

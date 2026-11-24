@@ -10,6 +10,7 @@ const { buildWorkbook } = require('./export');
 const auth = require('./auth');
 const connectors = require('./connectors');
 const inventory = require('./inventory');
+const formats = require('./formats');
 const emailConnector = require('./connectors/email');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -74,12 +75,20 @@ function createApp(db = openDb()) {
     try {
       if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
       const filename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      for (const [t, p] of pending) if (p.expires < Date.now()) pending.delete(t);
+      // known report layouts (Beecomm workbook, ShiftOrganizer per-employee report) are recognised as a whole
+      const known = !imp.KINDS[req.body.kind] ? await formats.detectFormat(req.file.buffer, filename) : null;
+      if (known) {
+        const token = crypto.randomUUID();
+        pending.set(token, { format: known, filename, expires: Date.now() + 30 * 60 * 1000 });
+        return res.json({ token, filename, format: known.format, label: known.label, source: known.source, range: known.range,
+          day: known.day || null, branch: known.branch || null, parts: formats.describe(known), notes: known.notes });
+      }
       const parsed = await imp.parseFile(req.file.buffer, filename);
       if (!parsed.rows.length) return res.status(400).json({ error: 'הקובץ ריק או שלא נמצאה בו טבלה' });
       const kind = imp.KINDS[req.body.kind] ? req.body.kind : imp.detectKind(parsed.headers);
       const mapping = imp.guessMapping(kind, parsed.headers);
       const token = crypto.randomUUID();
-      for (const [t, p] of pending) if (p.expires < Date.now()) pending.delete(t);
       pending.set(token, { parsed, filename, expires: Date.now() + 30 * 60 * 1000 });
       const norm = imp.normalizeRows(kind, parsed.rows, mapping);
       res.json({
@@ -89,6 +98,14 @@ function createApp(db = openDb()) {
         preview: summarizeNorm(norm)
       });
     } catch (e) { next(e); }
+  });
+
+  app.post('/api/import/commit-format', (req, res) => {
+    const p = pending.get(req.body.token);
+    if (!p?.format) return res.status(410).json({ error: 'פג תוקף הקובץ, יש להעלות מחדש' });
+    const results = formats.commitFormat(db, p.format, { filename: p.filename });
+    pending.delete(req.body.token);
+    res.json({ results, range: p.format.range, format: p.format.format });
   });
 
   app.post('/api/import/check', (req, res) => {

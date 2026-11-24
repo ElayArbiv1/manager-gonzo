@@ -238,6 +238,9 @@ function migrate(db) {
   const hasCol = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === col);
   if (!hasCol('shifts', 'tips')) db.exec('ALTER TABLE shifts ADD COLUMN tips REAL');
   if (!hasCol('shifts', 'tips_per_hour')) db.exec('ALTER TABLE shifts ADD COLUMN tips_per_hour REAL');
+  // sales rows that are totals for a period (weekly report) carry its first day; `date` is the day they're stored on
+  if (!hasCol('sales', 'period_from')) db.exec('ALTER TABLE sales ADD COLUMN period_from TEXT');
+  if (!hasCol('shifts', 'topup')) db.exec('ALTER TABLE shifts ADD COLUMN topup REAL');   // minimum-wage top-up from the shift app
   // make sure every role seen in shifts / employees has a row
   syncRoles(db);
 
@@ -245,7 +248,8 @@ function migrate(db) {
   for (const [k, v] of Object.entries(defaults)) ins.run(k, v);
 }
 
-const TIP_ROLE_RE = /מלצר|ברמן|ברמנ|waiter|waitress|bartend|server/i;
+// waiter / bartender roles are paid from tips. Trainees (התלמדות) are paid by the business.
+const TIP_ROLE_RE = /^(בר|ברמן|ברמנית|ברמן\/ית|מלצר|מלצרית|מלצר\/ית|מלצרות|waiter|waitress|bartender|server)$/i;
 
 /** Adds missing roles. Waiter / bartender roles default to 'tips'; others wait for a rate. */
 function syncRoles(db) {
