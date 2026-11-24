@@ -1,0 +1,140 @@
+'use strict';
+const path = require('path');
+const fs = require('fs');
+const Database = require('better-sqlite3');
+
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+
+function openDb(file) {
+  const target = file || process.env.DB_FILE || path.join(DATA_DIR, 'gonzo.db');
+  if (target !== ':memory:') fs.mkdirSync(path.dirname(target), { recursive: true });
+  const db = new Database(target);
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+  migrate(db);
+  return db;
+}
+
+function migrate(db) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS imports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,             -- sales | items | cancellations | shifts
+      source TEXT NOT NULL,           -- website | beecomm | shift | manual ...
+      filename TEXT,
+      date_from TEXT,
+      date_to TEXT,
+      rows INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    -- One row per order or per day (depends on the source file). Reports aggregate by date.
+    CREATE TABLE IF NOT EXISTS sales (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,             -- YYYY-MM-DD
+      hour INTEGER,                   -- 0-23 when known
+      amount REAL NOT NULL DEFAULT 0, -- gross incl. VAT
+      orders INTEGER NOT NULL DEFAULT 1,
+      guests INTEGER,
+      discount REAL NOT NULL DEFAULT 0,
+      tips REAL NOT NULL DEFAULT 0,
+      channel TEXT,                   -- dine-in / delivery / takeaway / website ...
+      payment TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(date);
+
+    CREATE TABLE IF NOT EXISTS items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,
+      item TEXT NOT NULL,
+      category TEXT,
+      qty REAL NOT NULL DEFAULT 0,
+      amount REAL NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_items_date ON items(date);
+
+    CREATE TABLE IF NOT EXISTS cancellations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,
+      time TEXT,
+      item TEXT,
+      qty REAL NOT NULL DEFAULT 1,
+      amount REAL NOT NULL DEFAULT 0,
+      employee TEXT,
+      reason TEXT,
+      approved_by TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cancel_date ON cancellations(date);
+
+    CREATE TABLE IF NOT EXISTS employees (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      role TEXT,
+      hourly_rate REAL NOT NULL DEFAULT 0,
+      active INTEGER NOT NULL DEFAULT 1
+    );
+
+    CREATE TABLE IF NOT EXISTS shifts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,
+      employee TEXT NOT NULL,
+      role TEXT,
+      start TEXT,                     -- HH:MM
+      end TEXT,
+      hours REAL NOT NULL DEFAULT 0,
+      hourly_rate REAL,
+      cost REAL                       -- NULL = compute from employee rate
+    );
+    CREATE INDEX IF NOT EXISTS idx_shifts_date ON shifts(date);
+
+    CREATE TABLE IF NOT EXISTS expenses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      category TEXT NOT NULL,         -- goods / rent / utilities / other
+      supplier TEXT,
+      amount REAL NOT NULL,
+      note TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS daily_log (
+      date TEXT PRIMARY KEY,
+      note TEXT,
+      cash_counted REAL,
+      weather TEXT,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT
+    );
+  `);
+
+  const defaults = {
+    business_name: 'Gonzo',
+    vat_percent: '18',
+    labor_target_percent: '28',
+    employer_cost_factor: '1.25',   // social benefits on top of gross hourly rate
+    week_start: '0',                // 0 = Sunday
+    weekly_sales_target: '0',
+    cancel_alert_percent: '2'
+  };
+  const ins = db.prepare('INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)');
+  for (const [k, v] of Object.entries(defaults)) ins.run(k, v);
+}
+
+function getSettings(db) {
+  const out = {};
+  for (const r of db.prepare('SELECT key, value FROM settings').all()) out[r.key] = r.value;
+  return out;
+}
+
+module.exports = { openDb, getSettings, DATA_DIR };

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gonzo · ניהול</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23d9480f'/><text x='16' y='23' font-size='20' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>G</text></svg>">
+</head>
+<body>
+  <div id="login" class="login hidden">
+    <form id="login-form" class="card login-card">
+      <h1>Gonzo · ניהול</h1>
+      <label>סיסמה <input type="password" name="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">כניסה</button>
+      <p class="error" id="login-error"></p>
+    </form>
+  </div>
+
+  <div id="shell" class="shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="logo">G</span><span id="brand-name">Gonzo</span></div>
+      <nav id="nav">
+        <a href="#dashboard" data-route="dashboard">📊 לוח בקרה</a>
+        <a href="#sales" data-route="sales">💰 מכירות</a>
+        <a href="#labor" data-route="labor">⏱️ שעות ועלות עבודה</a>
+        <a href="#cancellations" data-route="cancellations">❌ ביטולים</a>
+        <a href="#forecast" data-route="forecast">🔮 תחזית ותכנון משמרות</a>
+        <a href="#import" data-route="import">📥 ייבוא דוחות</a>
+        <a href="#employees" data-route="employees">👥 עובדים</a>
+        <a href="#expenses" data-route="expenses">🧾 הוצאות</a>
+        <a href="#log" data-route="log">📝 יומן משמרת</a>
+        <a href="#settings" data-route="settings">⚙️ הגדרות</a>
+      </nav>
+      <button id="logout" class="btn ghost small hidden">התנתקות</button>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <h2 id="page-title"></h2>
+        <div id="range" class="range">
+          <button class="btn small" data-preset="prev">◀ שבוע קודם</button>
+          <button class="btn small" data-preset="week">השבוע</button>
+          <button class="btn small" data-preset="next">שבוע הבא ▶</button>
+          <button class="btn small" data-preset="month">החודש</button>
+          <input type="date" id="from"> – <input type="date" id="to">
+          <a id="export" class="btn small primary" href="#">⬇️ Excel</a>
+        </div>
+      </header>
+      <section id="view" class="view"></section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <script src="/vendor/chart.js/chart.umd.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
