@@ -145,6 +145,12 @@ function locateHeader(table) {
 function guessMapping(kind, headers) {
   const def = KINDS[kind];
   if (!def) throw new Error('סוג ייבוא לא מוכר');
+  return guessFieldMapping(def.fields, headers);
+}
+
+/** Maps headers onto any field definition object ({ field: { syn: [...] } }). */
+function guessFieldMapping(fields, headers) {
+  const def = { fields };
   const mapping = {};
   const used = new Set();
   const normed = headers.map(normHeader);
@@ -383,5 +389,5 @@ function commitImport(db, { kind, source, filename, rows, replace = true }) {
 
 module.exports = {
   KINDS, parseFile, guessMapping, detectKind, normalizeRows, commitImport,
-  toDate, toTime, toHours, toNumber, hoursBetween, normHeader, locateHeader
+  toDate, toTime, toHours, toNumber, hoursBetween, normHeader, locateHeader, guessFieldMapping
 };

@@ -112,6 +112,58 @@ function migrate(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- ---------- inventory ----------
+    CREATE TABLE IF NOT EXISTS inv_products (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      unit TEXT NOT NULL DEFAULT 'יח׳',  -- kg / liter / unit / bottle ...
+      category TEXT,
+      supplier TEXT,
+      unit_cost REAL NOT NULL DEFAULT 0,   -- last known cost per unit (before VAT)
+      par_level REAL,                      -- desired stock after delivery
+      active INTEGER NOT NULL DEFAULT 1
+    );
+
+    -- supply received (usually Monday morning)
+    CREATE TABLE IF NOT EXISTS inv_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL,
+      supplier TEXT,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS inv_delivery_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      delivery_id INTEGER NOT NULL REFERENCES inv_deliveries(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES inv_products(id) ON DELETE CASCADE,
+      qty REAL NOT NULL,
+      unit_cost REAL
+    );
+
+    -- stock counts (usually Saturday night after closing); one count per date
+    CREATE TABLE IF NOT EXISTS inv_counts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT NOT NULL UNIQUE,
+      note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS inv_count_lines (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      count_id INTEGER NOT NULL REFERENCES inv_counts(id) ON DELETE CASCADE,
+      product_id INTEGER NOT NULL REFERENCES inv_products(id) ON DELETE CASCADE,
+      qty REAL NOT NULL,
+      UNIQUE(count_id, product_id)
+    );
+
+    -- how much of each product one menu item uses (menu item name = item name in the sales-by-item report)
+    CREATE TABLE IF NOT EXISTS recipes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      menu_item TEXT NOT NULL,
+      product_id INTEGER NOT NULL REFERENCES inv_products(id) ON DELETE CASCADE,
+      qty REAL NOT NULL,
+      UNIQUE(menu_item, product_id)
+    );
+
     -- emails handled by the email connector (dedup + audit log)
     CREATE TABLE IF NOT EXISTS email_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

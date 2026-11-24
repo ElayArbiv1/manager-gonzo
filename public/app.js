@@ -590,6 +590,414 @@ views.log = {
   }
 };
 
+// ================= inventory =================
+const INV_TABS = [['inventory', 'צריכה ופחת'], ['inv-count', 'ספירת מלאי'], ['inv-delivery', 'קבלת סחורה'], ['inv-products', 'מוצרים'], ['inv-recipes', 'מתכונים']];
+const invTabs = active => `<div class="tabs">${INV_TABS.map(([r, l]) => `<a href="#${r}" class="${r === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
+const lastWeekday = (wd) => { const d = new Date(); d.setDate(d.getDate() - ((d.getDay() - wd + 7) % 7)); return iso(d); };
+const qtyf = v => (v == null ? '-' : new Intl.NumberFormat('he-IL', { maximumFractionDigits: 2 }).format(v));
+const UNITS = ['יח׳', 'ק״ג', 'גרם', 'ליטר', 'בקבוק', 'קרטון', 'חבית', 'ארגז', 'שקית'];
+
+async function uploadLines(file) {
+  const fd = new FormData(); fd.append('file', file);
+  return api('/api/inventory/parse', { method: 'POST', body: fd });
+}
+
+views.inventory = {
+  title: 'מלאי ופחת',
+  hideRange: true,
+  async render(el) {
+    const sel = new URLSearchParams(location.hash.split('?')[1] || '').get('count');
+    const [d, counts] = await Promise.all([api(`/api/inventory/report${sel ? `?count=${sel}` : ''}`), api('/api/inventory/counts')]);
+    if (d.status !== 'ok') {
+      el.innerHTML = invTabs('inventory') + `<div class="card empty">
+        ${d.status === 'no-counts' ? 'עוד אין ספירות מלאי.' : `יש ספירה אחת (${dmy(d.closing.date)}). צריך עוד ספירה כדי לחשב צריכה ופחת לתקופה ביניהן.`}
+        <ol class="steps" style="text-align:right;max-width:520px;margin:16px auto">
+          <li>מגדירים <a href="#inv-products">מוצרים</a> (או שהם נוצרים לבד מהספירה / החשבונית הראשונה)</li>
+          <li>מגדירים <a href="#inv-recipes">מתכונים</a>: כמה מכל מוצר נכנס בכל מנה</li>
+          <li>מוצאי שבת: <a href="#inv-count">ספירת מלאי</a></li>
+          <li>שני בבוקר: <a href="#inv-delivery">קבלת סחורה</a></li>
+          <li>בשבת הבאה סופרים שוב, והדוח מוכן</li>
+        </ol>
+        <a class="btn primary" href="#inv-count">🔢 להתחיל ספירה</a></div>`;
+      return;
+    }
+    const t = d.totals;
+    const rows = d.rows.slice().sort((a, b) => (b.waste_cost ?? -1e9) - (a.waste_cost ?? -1e9));
+    el.innerHTML = invTabs('inventory') + `
+      <div class="row" style="margin-bottom:16px">
+        <label>תקופה (בין ספירות)
+          <select id="inv-period">${counts.slice(0, -1).map((c, i) => `<option value="${c.id}" ${c.id === d.closing.id ? 'selected' : ''}>${dmy(counts[i + 1].date)} → ${dmy(c.date)}</option>`).join('')}</select>
+        </label>
+        <span class="muted">מכירות מ-${dmy(addDays(d.opening.date, 1))} עד ${dmy(d.closing.date)} (כולל)</span>
+      </div>
+      <div class="grid kpis">
+        ${kpi('פחת / חוסר (₪)', t.waste_cost)}
+        ${kpi('פחת כ-% מהמכירות נטו', t.waste_pct_of_sales, { fmt: pctf })}
+        ${kpi('עלות מזון בפועל', t.food_cost_pct, { fmt: pctf })}
+        ${kpi('עלות מזון תיאורטית (לפי מתכונים)', t.theoretical_food_cost_pct, { fmt: pctf })}
+        ${kpi('סחורה שהתקבלה', t.received_cost)}
+        ${kpi('שווי מלאי בסגירה', t.closing_value)}
+      </div>
+      ${d.itemSalesDays < d.periodDays ? `<div class="alert warn" style="margin-top:16px">⚠️ יש דוח "מכירות לפי פריט" רק ל-${d.itemSalesDays} מתוך ${d.periodDays} הימים בתקופה. בלי הדוח, מה שנמכר ייספר כפחת. <a href="#import">לייבוא הדוח</a></div>` : ''}
+      ${d.itemsWithoutRecipe.length ? `<div class="alert warn" style="margin-top:16px">${d.itemsWithoutRecipe.length} מנות שנמכרו בתקופה בלי מתכון, ולכן הצריכה שלהן לא נספרת כ"נמכר" ומופיעה כפחת: ${d.itemsWithoutRecipe.slice(0, 8).map(x => esc(x.item)).join(', ')}${d.itemsWithoutRecipe.length > 8 ? '…' : ''}. <a href="#inv-recipes">להגדרת מתכונים</a></div>` : ''}
+      <div class="card" style="margin-top:16px"><h3>צריכה ופחת לפי מוצר</h3>
+        <p class="muted" style="margin-top:0;font-size:13px">שימוש בפועל = פתיחה + התקבל − סגירה. נמכר = מכירות המנות × המתכון. פחת = שימוש בפועל − נמכר. ערך שלילי = נמכר יותר ממה שנצרך (בדרך כלל מתכון לא מדויק או טעות בספירה).</p>
+        ${table([
+          { key: 'product', label: 'מוצר' }, { key: 'unit', label: 'יחידה' },
+          { key: 'opening', label: 'פתיחה', fmt: qtyf }, { key: 'received', label: 'התקבל', fmt: qtyf }, { key: 'closing', label: 'סגירה', fmt: qtyf },
+          { key: 'used', label: 'שימוש בפועל', fmt: qtyf },
+          { key: 'sold', label: 'נמכר', html: (v, r) => (r.no_recipe ? '<a href="#inv-recipes" class="muted">אין מתכון</a>' : esc(qtyf(v))) },
+          { key: 'waste', label: 'פחת', fmt: qtyf, cls: (v, r) => (r.waste_pct > 10 ? 'bad' : '') },
+          { key: 'waste_pct', label: '% פחת', fmt: pctf, cls: v => (v > 10 ? 'bad' : v < -5 ? 'good' : '') },
+          { key: 'waste_cost', label: 'פחת ₪', fmt: money, cls: v => (v > 0 ? 'bad' : '') },
+          { key: 'suggested_order', label: 'להזמין', fmt: qtyf }
+        ], rows.map(r => (r.missing_count ? { ...r, product: r.product + ' (חסרה ספירה)' } : r)))}
+      </div>
+      ${d.itemsWithoutRecipe.length ? `<div class="card" style="margin-top:16px"><h3>מנות שנמכרו בלי מתכון</h3>${table([{ key: 'item', label: 'מנה' }, { key: 'qty', label: 'נמכרו', fmt: num }, { key: 'amount', label: 'סכום', fmt: money }], d.itemsWithoutRecipe)}</div>` : ''}
+      <div class="card" style="margin-top:16px"><h3>מגמה לפי שבועות</h3>
+        ${table([{ key: 'from', label: 'מ', fmt: dmy }, { key: 'to', label: 'עד', fmt: dmy }, { key: 'received_cost', label: 'התקבל', fmt: money }, { key: 'used_cost', label: 'שימוש', fmt: money }, { key: 'waste_cost', label: 'פחת ₪', fmt: money }, { key: 'waste_pct_of_sales', label: 'פחת % ממכירות', fmt: pctf }, { key: 'food_cost_pct', label: 'עלות מזון בפועל', fmt: pctf }, { key: 'theoretical_food_cost_pct', label: 'תיאורטית', fmt: pctf }], d.periods)}
+      </div>`;
+    $('#inv-period').onchange = e => { location.hash = `#inventory?count=${e.target.value}`; };
+  }
+};
+
+views['inv-count'] = {
+  title: 'ספירת מלאי',
+  hideRange: true,
+  async render(el) {
+    const params = new URLSearchParams(location.hash.split('?')[1] || '');
+    const date = params.get('date') || lastWeekday(6);
+    const [products, counts] = await Promise.all([api('/api/inventory/products'), api('/api/inventory/counts')]);
+    const existing = counts.find(c => c.date === date);
+    const prev = counts.find(c => c.date < date);
+    const [cur, last] = await Promise.all([existing ? api(`/api/inventory/counts/${existing.id}`) : null, prev ? api(`/api/inventory/counts/${prev.id}`) : null]);
+    const lastQty = Object.fromEntries((last?.lines || []).map(l => [l.product_id, l.qty]));
+    const draftKey = `gonzo-count-${date}`;
+    let values = Object.fromEntries((cur?.lines || []).map(l => [l.product_id, l.qty]));
+    let extra = [];   // products added during this count: {name, unit}
+    try {
+      const draft = JSON.parse(localStorage.getItem(draftKey) || 'null');
+      if (draft) { values = { ...values, ...draft.values }; extra = draft.extra || []; }
+    } catch { /* ignore */ }
+    const saveDraft = () => { try { localStorage.setItem(draftKey, JSON.stringify({ values, extra })); } catch { /* ignore */ } };
+
+    const active = products.filter(p => p.active);
+    const groups = {};
+    for (const p of active) (groups[p.category || 'כללי'] ||= []).push(p);
+
+    el.innerHTML = invTabs('inv-count') + `
+      <div class="card count-head">
+        <div class="row">
+          <label>תאריך הספירה <input type="date" id="cnt-date" value="${date}"></label>
+          <label style="flex:1;min-width:160px">חיפוש <input id="cnt-search" placeholder="שם מוצר…"></label>
+        </div>
+        <div class="muted" style="font-size:13px;margin-top:8px">
+          ${existing ? `⚠️ כבר יש ספירה לתאריך הזה. שמירה תעדכן אותה.` : prev ? `ספירה קודמת: ${dmy(prev.date)}. הכמות שלה מופיעה באפור ליד כל מוצר.` : 'זו הספירה הראשונה.'}
+        </div>
+        <div class="progress"><span id="cnt-bar"></span></div>
+        <div id="cnt-progress" class="muted" style="font-size:13px"></div>
+      </div>
+      ${active.length ? '' : `<div class="card empty" style="margin-top:16px">אין עדיין מוצרים. הוסיפו מוצרים למטה, <a href="#inv-products">במסך המוצרים</a>, או העלו קובץ ספירה.</div>`}
+      <div id="cnt-list">
+        ${Object.entries(groups).map(([g, ps]) => `
+          <div class="card count-group" style="margin-top:12px"><h3>${esc(g)}</h3>
+            ${ps.map(p => `
+              <div class="count-row" data-name="${esc(p.name.toLowerCase())}">
+                <div class="count-name"><b>${esc(p.name)}</b><span class="muted"> · ${esc(p.unit)}${p.id in lastQty ? ` · קודם: ${qtyf(lastQty[p.id])}` : ''}</span></div>
+                <div class="count-input">
+                  <button type="button" class="btn step" data-step="-1" data-id="${p.id}">−</button>
+                  <input type="number" inputmode="decimal" step="any" min="0" data-id="${p.id}" value="${values[p.id] ?? ''}" placeholder="—">
+                  <button type="button" class="btn step" data-step="1" data-id="${p.id}">+</button>
+                </div>
+              </div>`).join('')}
+          </div>`).join('')}
+      </div>
+      <div class="card" style="margin-top:12px">
+        <h3>מוצר שלא ברשימה</h3>
+        <div id="cnt-extra">${extra.map((x, i) => `<div class="count-row"><div class="count-name"><b>${esc(x.name)}</b><span class="muted"> · ${esc(x.unit)} · חדש</span></div><div class="count-input"><input type="number" inputmode="decimal" step="any" min="0" data-extra="${i}" value="${x.qty ?? ''}"></div></div>`).join('')}</div>
+        <form id="cnt-add" class="row">
+          <label>שם <input name="name" required></label>
+          <label>יחידה <select name="unit">${UNITS.map(u => `<option>${u}</option>`).join('')}</select></label>
+          <button class="btn">הוספה</button>
+        </form>
+        <div class="row" style="margin-top:12px">
+          <label>או העלאת קובץ ספירה (Excel/CSV עם מוצר + כמות) <input type="file" id="cnt-file" accept=".csv,.xlsx,.xlsm"></label>
+        </div>
+      </div>
+      <div class="save-bar">
+        <label style="flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="cnt-zero"> מוצר שלא מולא = 0</label>
+        <button class="btn primary" id="cnt-save">💾 שמירת ספירה</button>
+      </div>`;
+
+    const total = () => active.length + extra.length;
+    const filled = () => active.filter(p => values[p.id] !== undefined && values[p.id] !== '').length + extra.filter(x => x.qty !== undefined && x.qty !== '').length;
+    const progress = () => {
+      const f = filled(), tt = total();
+      $('#cnt-progress').textContent = `נספרו ${f} מתוך ${tt} מוצרים`;
+      $('#cnt-bar').style.width = tt ? `${(f / tt) * 100}%` : '0';
+    };
+    progress();
+
+    $('#cnt-date').onchange = e => { location.hash = `#inv-count?date=${e.target.value}`; };
+    $('#cnt-search').oninput = e => {
+      const s = e.target.value.trim().toLowerCase();
+      $$('.count-row[data-name]', el).forEach(r => r.classList.toggle('hidden', s && !r.dataset.name.includes(s)));
+      $$('.count-group', el).forEach(g => g.classList.toggle('hidden', !$$('.count-row:not(.hidden)', g).length));
+    };
+    $$('input[data-id]', el).forEach(inp => inp.oninput = () => { values[inp.dataset.id] = inp.value === '' ? undefined : Number(inp.value); saveDraft(); progress(); });
+    $$('input[data-extra]', el).forEach(inp => inp.oninput = () => { extra[inp.dataset.extra].qty = inp.value === '' ? undefined : Number(inp.value); saveDraft(); progress(); });
+    $$('[data-step]', el).forEach(b => b.onclick = () => {
+      const inp = $(`input[data-id="${b.dataset.id}"]`, el);
+      inp.value = Math.max(0, (Number(inp.value) || 0) + Number(b.dataset.step));
+      inp.dispatchEvent(new Event('input'));
+    });
+    $('#cnt-add').onsubmit = e => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      extra.push({ name: f.name.trim(), unit: f.unit });
+      saveDraft(); render();
+    };
+    $('#cnt-file').onchange = async e => {
+      try {
+        const r = await uploadLines(e.target.files[0]);
+        for (const l of r.lines) {
+          if (l.product_id) values[l.product_id] = l.qty;
+          else extra.push({ name: l.product, unit: l.unit || 'יח׳', qty: l.qty });
+        }
+        saveDraft(); toast(`נטענו ${r.lines.length} שורות מהקובץ. בדקו ושמרו`); render();
+      } catch (err) { toast(err.message, 5000); }
+    };
+    $('#cnt-save').onclick = async () => {
+      const zero = $('#cnt-zero').checked;
+      const lines = [
+        ...active.map(p => ({ product_id: p.id, qty: values[p.id] ?? (zero ? 0 : null) })),
+        ...extra.map(x => ({ product: x.name, unit: x.unit, qty: x.qty ?? (zero ? 0 : null) }))
+      ].filter(l => l.qty != null);
+      const missing = total() - lines.length;
+      if (missing && !confirm(`${missing} מוצרים לא נספרו ולא ייכללו בספירה. לשמור בכל זאת?`)) return;
+      try {
+        const r = await api('/api/inventory/counts', { method: 'POST', body: { date: $('#cnt-date').value, lines } });
+        try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+        toast(`הספירה נשמרה (${r.lines} מוצרים)`);
+        location.hash = '#inventory';
+      } catch (err) { toast(err.message, 5000); }
+    };
+  }
+};
+
+views['inv-delivery'] = {
+  title: 'קבלת סחורה',
+  hideRange: true,
+  async render(el) {
+    const editId = new URLSearchParams(location.hash.split('?')[1] || '').get('id');
+    const [products, list, editing] = await Promise.all([
+      api('/api/inventory/products'), api('/api/inventory/deliveries'), editId ? api(`/api/inventory/deliveries/${editId}`) : null
+    ]);
+    const byName = Object.fromEntries(products.map(p => [p.name, p]));
+    let lines = editing ? editing.lines.map(l => ({ product: l.product, qty: l.qty, unit: l.unit, unit_cost: l.unit_cost })) : [];
+    if (!lines.length) lines = [{}];
+
+    el.innerHTML = invTabs('inv-delivery') + `
+      <div class="card">
+        <h3>${editing ? `עריכת קבלת סחורה מ-${dmy(editing.date)}` : 'קבלת סחורה חדשה'}</h3>
+        <div class="row">
+          <label>תאריך <input type="date" id="dl-date" value="${editing?.date || lastWeekday(1)}"></label>
+          <label>ספק <input id="dl-supplier" value="${esc(editing?.supplier || '')}" list="dl-suppliers"></label>
+          <label style="flex:1">הערה <input id="dl-note" value="${esc(editing?.note || '')}"></label>
+          <label>מילוי מחשבונית (Excel/CSV) <input type="file" id="dl-file" accept=".csv,.xlsx,.xlsm"></label>
+        </div>
+        <datalist id="dl-suppliers">${[...new Set(products.map(p => p.supplier).filter(Boolean))].map(s => `<option>${esc(s)}</option>`).join('')}</datalist>
+        <datalist id="dl-products">${products.map(p => `<option value="${esc(p.name)}">`).join('')}</datalist>
+        <div class="table-wrap" style="margin-top:12px"><table class="edit-table">
+          <thead><tr><th>מוצר</th><th>כמות</th><th>יחידה</th><th>מחיר ליחידה (לפני מע״מ)</th><th>סה״כ</th><th></th></tr></thead>
+          <tbody id="dl-lines"></tbody>
+          <tfoot><tr><td colspan="4">סה״כ</td><td id="dl-total"></td><td></td></tr></tfoot>
+        </table></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" id="dl-add">+ שורה</button>
+          <button class="btn" id="dl-par" title="ממלא לפי רמת מלאי רצויה פחות הספירה האחרונה">מילוי לפי הזמנה מומלצת</button>
+          <span style="flex:1"></span>
+          ${editing ? '<a class="btn ghost" href="#inv-delivery">ביטול</a>' : ''}
+          <button class="btn primary" id="dl-save">💾 שמירה</button>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>קבלות קודמות</h3>
+        ${table([{ key: 'date', label: 'תאריך', fmt: dmy }, { key: 'supplier', label: 'ספק' }, { key: 'lines', label: 'שורות', fmt: num }, { key: 'total', label: 'סה״כ', fmt: money }, { key: 'note', label: 'הערה' },
+          { key: 'id', label: '', html: id => `<a class="btn small" href="#inv-delivery?id=${id}">עריכה</a> <button class="btn small danger" data-del="${id}">מחיקה</button>` }], list, { empty: 'עוד לא נקלטה סחורה' })}
+      </div>`;
+
+    const drawLines = () => {
+      $('#dl-lines').innerHTML = lines.map((l, i) => `<tr data-i="${i}">
+        <td><input data-k="product" list="dl-products" value="${esc(l.product || '')}" style="min-width:180px"></td>
+        <td><input data-k="qty" type="number" inputmode="decimal" step="any" value="${l.qty ?? ''}" style="width:90px"></td>
+        <td><select data-k="unit">${UNITS.map(u => `<option ${(l.unit || byName[l.product]?.unit) === u ? 'selected' : ''}>${u}</option>`).join('')}${l.unit && !UNITS.includes(l.unit) ? `<option selected>${esc(l.unit)}</option>` : ''}</select></td>
+        <td><input data-k="unit_cost" type="number" inputmode="decimal" step="any" value="${l.unit_cost ?? ''}" style="width:110px"></td>
+        <td>${money((Number(l.qty) || 0) * (Number(l.unit_cost) || 0))}</td>
+        <td><button class="btn small danger" data-rm="${i}">✕</button></td></tr>`).join('');
+      $('#dl-total').textContent = money(lines.reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unit_cost) || 0), 0));
+      $$('#dl-lines input, #dl-lines select').forEach(inp => inp.onchange = () => {
+        const l = lines[inp.closest('tr').dataset.i];
+        l[inp.dataset.k] = inp.value;
+        if (inp.dataset.k === 'product' && byName[inp.value]) { l.unit = byName[inp.value].unit; if (!l.unit_cost) l.unit_cost = byName[inp.value].unit_cost || ''; }
+        drawLines();
+      });
+      $$('[data-rm]').forEach(b => b.onclick = () => { lines.splice(Number(b.dataset.rm), 1); if (!lines.length) lines.push({}); drawLines(); });
+    };
+    drawLines();
+
+    $('#dl-add').onclick = () => { lines.push({}); drawLines(); };
+    $('#dl-par').onclick = async () => {
+      const r = await api('/api/inventory/report');
+      const sug = (r.rows || []).filter(x => x.suggested_order > 0);
+      if (!sug.length) return toast('אין הזמנה מומלצת. צריך להגדיר "מלאי רצוי" למוצרים ולבצע ספירה');
+      lines = sug.map(x => ({ product: x.product, qty: x.suggested_order, unit: x.unit, unit_cost: x.unit_cost || '' }));
+      drawLines();
+    };
+    $('#dl-file').onchange = async e => {
+      try {
+        const r = await uploadLines(e.target.files[0]);
+        lines = r.lines.map(l => ({ product: l.product, qty: l.qty, unit: l.unit, unit_cost: l.unit_cost ?? byName[l.product]?.unit_cost ?? '' }));
+        const nNew = r.lines.filter(l => l.is_new).length;
+        toast(`נטענו ${r.lines.length} שורות${nNew ? `, מתוכן ${nNew} מוצרים חדשים שייווצרו בשמירה` : ''}`, 5000);
+        drawLines();
+      } catch (err) { toast(err.message, 5000); }
+    };
+    $('#dl-save').onclick = async () => {
+      const body = { id: editing?.id, date: $('#dl-date').value, supplier: $('#dl-supplier').value, note: $('#dl-note').value, lines: lines.filter(l => l.product && l.qty !== '' && l.qty != null) };
+      try { await api('/api/inventory/deliveries', { method: 'POST', body }); toast('נשמר'); location.hash = '#inv-delivery'; render(); } catch (err) { toast(err.message, 5000); }
+    };
+    $$('[data-del]', el).forEach(b => b.onclick = async () => {
+      if (!confirm('למחוק את קבלת הסחורה?')) return;
+      await api(`/api/inventory/deliveries/${b.dataset.del}`, { method: 'DELETE' }); render();
+    });
+  }
+};
+
+views['inv-products'] = {
+  title: 'מוצרי מלאי',
+  hideRange: true,
+  async render(el) {
+    const products = await api('/api/inventory/products');
+    const cats = [...new Set(products.map(p => p.category).filter(Boolean))];
+    el.innerHTML = invTabs('inv-products') + `
+      <div class="card">
+        <h3>הוספת מוצר</h3>
+        <form id="pr-add" class="row">
+          <label>שם <input name="name" required></label>
+          <label>יחידה <select name="unit">${UNITS.map(u => `<option>${u}</option>`).join('')}</select></label>
+          <label>קטגוריה <input name="category" list="pr-cats" placeholder="ירקות, בשר, משקאות…"></label>
+          <label>ספק <input name="supplier"></label>
+          <label>מחיר ליחידה <input name="unit_cost" type="number" step="any" style="width:100px"></label>
+          <label>מלאי רצוי <input name="par_level" type="number" step="any" style="width:90px" title="כמה רוצים שיהיה אחרי קבלת סחורה"></label>
+          <button class="btn primary">הוספה</button>
+        </form>
+        <datalist id="pr-cats">${cats.map(c => `<option>${esc(c)}</option>`).join('')}</datalist>
+        <p class="muted" style="font-size:13px">"מלאי רצוי" משמש לחישוב הזמנה מומלצת: מלאי רצוי פחות מה שנספר בשבת. המחיר מתעדכן אוטומטית מכל קבלת סחורה.</p>
+      </div>
+      <div class="card" style="margin-top:16px">
+        ${products.length ? `<div class="table-wrap"><table class="edit-table"><thead><tr><th>שם</th><th>יחידה</th><th>קטגוריה</th><th>ספק</th><th>מחיר</th><th>מלאי רצוי</th><th>פעיל</th><th></th></tr></thead><tbody>
+          ${products.map(p => `<tr data-id="${p.id}">
+            <td><input data-k="name" value="${esc(p.name)}" style="min-width:150px"></td>
+            <td><input data-k="unit" value="${esc(p.unit)}" list="pr-units" style="width:80px"></td>
+            <td><input data-k="category" value="${esc(p.category || '')}" list="pr-cats" style="width:110px"></td>
+            <td><input data-k="supplier" value="${esc(p.supplier || '')}" style="width:110px"></td>
+            <td><input data-k="unit_cost" type="number" step="any" value="${p.unit_cost ?? ''}" style="width:90px"></td>
+            <td><input data-k="par_level" type="number" step="any" value="${p.par_level ?? ''}" style="width:80px"></td>
+            <td><input data-k="active" type="checkbox" ${p.active ? 'checked' : ''}></td>
+            <td><button class="btn small" data-save>שמירה</button> <button class="btn small danger" data-del>מחיקה</button></td></tr>`).join('')}
+        </tbody></table></div><datalist id="pr-units">${UNITS.map(u => `<option>${u}</option>`).join('')}</datalist>` : '<div class="empty">אין מוצרים עדיין</div>'}
+      </div>`;
+    $('#pr-add').onsubmit = async e => {
+      e.preventDefault();
+      try { await api('/api/inventory/products', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast('נוסף'); render(); } catch (err) { toast(err.message); }
+    };
+    $$('tr[data-id]', el).forEach(tr => {
+      $('[data-save]', tr).onclick = async () => {
+        const body = Object.fromEntries($$('[data-k]', tr).map(i => [i.dataset.k, i.type === 'checkbox' ? i.checked : i.value]));
+        try { await api(`/api/inventory/products/${tr.dataset.id}`, { method: 'PUT', body }); toast('נשמר'); } catch (err) { toast(err.message); }
+      };
+      $('[data-del]', tr).onclick = async () => {
+        if (!confirm('למחוק את המוצר? הוא יימחק גם מכל הספירות, ההזמנות והמתכונים. אפשר במקום זה לסמן אותו כלא פעיל')) return;
+        await api(`/api/inventory/products/${tr.dataset.id}`, { method: 'DELETE' }); render();
+      };
+    });
+  }
+};
+
+views['inv-recipes'] = {
+  title: 'מתכונים',
+  hideRange: true,
+  async render(el) {
+    const [items, products] = await Promise.all([api('/api/inventory/recipes'), api('/api/inventory/products')]);
+    const done = items.filter(i => i.lines.length).length;
+    el.innerHTML = invTabs('inv-recipes') + `
+      <div class="card">
+        <p style="margin-top:0">לכל מנה שנמכרת מגדירים כמה מכל מוצר מלאי היא צורכת, ביחידת המידה של המוצר. לדוגמה: המבורגר = לחמנייה 1 יח׳ + בשר 0.18 ק״ג + צ׳דר 0.02 ק״ג. משקה שנמכר כמו שהוא (בקבוק בירה) = 1 יח׳ מאותו מוצר.</p>
+        <div class="muted">הוגדרו ${done} מתוך ${items.length} מנות. רשימת המנות מגיעה מדוח "מכירות לפי פריט" של ביקום.</div>
+        <div class="row" style="margin-top:12px">
+          <label style="flex:1">חיפוש <input id="rc-search" placeholder="שם מנה…"></label>
+          <label style="flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="rc-missing"> רק מנות בלי מתכון</label>
+        </div>
+        <form id="rc-new" class="row" style="margin-top:8px"><label>מנה שלא ברשימה <input name="item" required></label><button class="btn">הוספה</button></form>
+      </div>
+      <datalist id="rc-products">${products.map(p => `<option value="${esc(p.name)}">`).join('')}</datalist>
+      <div id="rc-list">${items.map((it, n) => recipeCard(it, n, products)).join('')}</div>`;
+
+    const filter = () => {
+      const s = $('#rc-search').value.trim().toLowerCase(), m = $('#rc-missing').checked;
+      $$('.recipe', el).forEach(c => c.classList.toggle('hidden', (s && !c.dataset.item.toLowerCase().includes(s)) || (m && c.dataset.has === '1')));
+    };
+    $('#rc-search').oninput = filter; $('#rc-missing').onchange = filter;
+    $('#rc-new').onsubmit = e => {
+      e.preventDefault();
+      const item = new FormData(e.target).get('item').trim();
+      items.unshift({ item, lines: [], sold_90d: 0 });
+      $('#rc-list').insertAdjacentHTML('afterbegin', recipeCard(items[0], 'new', products));
+      bind($('#rc-list .recipe'));
+      e.target.reset();
+    };
+    const bind = card => {
+      $('[data-addline]', card).onclick = () => $('.rc-lines', card).insertAdjacentHTML('beforeend', recipeLine({}, products));
+      $('[data-same]', card)?.addEventListener('click', () => $('.rc-lines', card).insertAdjacentHTML('beforeend', recipeLine({ product: card.dataset.item, qty: 1 }, products)));
+      card.addEventListener('click', e => { if (e.target.matches('[data-rmline]')) e.target.closest('.rc-line').remove(); });
+      card.addEventListener('input', e => { if (e.target.matches('[data-k=product]')) { const p = products.find(x => x.name === e.target.value); const u = $('.rc-unit', e.target.closest('.rc-line')); if (u) u.textContent = p ? p.unit : 'חדש'; } });
+      $('[data-saverc]', card).onclick = async () => {
+        const lines = $$('.rc-line', card).map(r => ({ product: $('[data-k=product]', r).value.trim(), qty: $('[data-k=qty]', r).value })).filter(l => l.product && Number(l.qty) > 0);
+        try {
+          await api('/api/inventory/recipes', { method: 'PUT', body: { item: card.dataset.item, lines } });
+          card.dataset.has = lines.length ? '1' : '0';
+          $('.rc-status', card).innerHTML = lines.length ? '<span class="pill good">מוגדר</span>' : '<span class="pill">אין מתכון</span>';
+          toast('המתכון נשמר');
+        } catch (err) { toast(err.message, 5000); }
+      };
+    };
+    $$('.recipe', el).forEach(bind);
+  }
+};
+
+function recipeLine(l, products) {
+  const unit = products.find(p => p.name === l.product)?.unit || (l.product ? 'חדש' : '');
+  return `<div class="rc-line row">
+    <input data-k="product" list="rc-products" value="${esc(l.product || '')}" placeholder="מוצר מלאי" style="flex:1;min-width:150px">
+    <input data-k="qty" type="number" inputmode="decimal" step="any" min="0" value="${l.qty ?? ''}" placeholder="כמות" style="width:90px">
+    <span class="rc-unit muted" style="min-width:40px">${esc(unit)}</span>
+    <button type="button" class="btn small danger" data-rmline>✕</button></div>`;
+}
+function recipeCard(it, n, products) {
+  return `<div class="card recipe" style="margin-top:12px" data-item="${esc(it.item)}" data-has="${it.lines.length ? 1 : 0}">
+    <div class="row" style="justify-content:space-between;align-items:center">
+      <div><b>${esc(it.item)}</b> <span class="muted">${it.category ? esc(it.category) + ' · ' : ''}${it.sold_90d ? `נמכרו ${num(it.sold_90d)} ב-90 יום` : ''}</span></div>
+      <span class="rc-status">${it.lines.length ? '<span class="pill good">מוגדר</span>' : '<span class="pill">אין מתכון</span>'}</span>
+    </div>
+    <div class="rc-lines stack" style="gap:6px;margin-top:10px">${it.lines.map(l => recipeLine(l, products)).join('')}</div>
+    <div class="row" style="margin-top:8px">
+      <button type="button" class="btn small" data-addline>+ מוצר</button>
+      ${products.some(p => p.name === it.item) ? '<button type="button" class="btn small" data-same>נמכר כמו שהוא (1:1)</button>' : ''}
+      <span style="flex:1"></span>
+      <button type="button" class="btn small primary" data-saverc>שמירה</button>
+    </div></div>`;
+}
+
 const STATUS_LABELS = {
   imported: ['יובא', 'good'], ok: ['תקין', 'good'], failed: ['נכשל', 'bad'], skipped: ['דולג', ''], 'no-data': ['אין נתונים', ''],
   duplicate: ['כבר טופל', ''], error: ['שגיאה', 'bad'], running: ['רץ…', '']
@@ -756,9 +1164,10 @@ views.settings = {
 // ---------- router ----------
 let renderSeq = 0;
 async function render() {
-  const route = (location.hash || '#dashboard').slice(1);
+  const route = (location.hash || '#dashboard').slice(1).split('?')[0];
+  const navRoute = route.startsWith('inv-') && route !== 'inv-count' ? 'inventory' : route;
   const view = views[route] || views.dashboard;
-  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === route));
+  $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === navRoute));
   $('#page-title').textContent = view.title;
   $('#range').classList.toggle('hidden', !!view.hideRange);
   $('#export').href = `/api/reports/export.xlsx?${q()}`;

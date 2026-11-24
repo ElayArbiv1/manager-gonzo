@@ -9,6 +9,7 @@ const reports = require('./reports');
 const { buildWorkbook } = require('./export');
 const auth = require('./auth');
 const connectors = require('./connectors');
+const inventory = require('./inventory');
 const emailConnector = require('./connectors/email');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -184,6 +185,53 @@ function createApp(db = openDb()) {
       ON CONFLICT(date) DO UPDATE SET note=excluded.note, cash_counted=excluded.cash_counted, weather=excluded.weather, updated_at=excluded.updated_at`)
       .run(date, note || null, cash_counted === '' || cash_counted == null ? null : Number(cash_counted), weather || null);
     res.json({ ok: true });
+  });
+
+  // ---------- inventory ----------
+  app.get('/api/inventory/products', (req, res) => res.json(inventory.listProducts(db)));
+  app.post('/api/inventory/products', (req, res) => res.json({ id: inventory.upsertProduct(db, req.body) }));
+  app.put('/api/inventory/products/:id', (req, res) => res.json({ id: inventory.upsertProduct(db, { ...req.body, id: req.params.id }) }));
+  app.delete('/api/inventory/products/:id', (req, res) => {
+    db.prepare('DELETE FROM inv_products WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/inventory/deliveries', (req, res) => res.json(inventory.listDeliveries(db)));
+  app.get('/api/inventory/deliveries/:id', (req, res) => {
+    const d = inventory.getDelivery(db, Number(req.params.id));
+    d ? res.json(d) : res.status(404).json({ error: 'לא נמצא' });
+  });
+  app.post('/api/inventory/deliveries', (req, res) => res.json(inventory.saveDelivery(db, req.body)));
+  app.delete('/api/inventory/deliveries/:id', (req, res) => {
+    db.prepare('DELETE FROM inv_deliveries WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  app.get('/api/inventory/counts', (req, res) => res.json(inventory.listCounts(db)));
+  app.get('/api/inventory/counts/:id', (req, res) => {
+    const c = inventory.getCount(db, Number(req.params.id));
+    c ? res.json(c) : res.status(404).json({ error: 'לא נמצא' });
+  });
+  app.post('/api/inventory/counts', (req, res) => res.json(inventory.saveCount(db, req.body)));
+  app.delete('/api/inventory/counts/:id', (req, res) => {
+    db.prepare('DELETE FROM inv_counts WHERE id = ?').run(Number(req.params.id));
+    res.json({ ok: true });
+  });
+
+  // supplier invoice / count sheet → lines for the UI to review before saving
+  app.post('/api/inventory/parse', upload.single('file'), async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+      const filename = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+      res.json(await inventory.parseLinesFile(db, req.file.buffer, filename));
+    } catch (e) { next(e); }
+  });
+
+  app.get('/api/inventory/recipes', (req, res) => res.json(inventory.menuItems(db)));
+  app.put('/api/inventory/recipes', (req, res) => res.json(inventory.setRecipe(db, req.body.item, req.body.lines)));
+
+  app.get('/api/inventory/report', (req, res) => {
+    res.json({ ...inventory.usageReport(db, req.query.count ? Number(req.query.count) : null), periods: inventory.periods(db) });
   });
 
   // ---------- connectors (email now, Beecomm API later) ----------
