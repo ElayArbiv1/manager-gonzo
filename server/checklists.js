@@ -13,6 +13,9 @@ const PHOTO_DIR = () => path.join(process.env.DATA_DIR || DATA_DIR, 'photos');
 const PHOTO_OPTS = ['none', 'optional', 'required'];
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif' };
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const TIME_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+const hhmm = v => { const s = String(v ?? '').trim(); if (!s) return null; if (!TIME_RE.test(s)) throw bad(`שעה לא תקינה: ${s}`); return s.padStart(5, '0'); };
+const mins = v => (v === '' || v == null ? null : Math.max(0, Math.round(Number(v))) || 0);
 const bad = (msg, status = 400) => Object.assign(new Error(msg), { status });
 
 // ---------- templates ----------
@@ -20,6 +23,7 @@ function listTemplates(db, { all = false } = {}) {
   return db.prepare(`SELECT t.*,
       (SELECT COUNT(*) FROM checklist_items i JOIN checklist_sections s ON s.id = i.section_id WHERE s.template_id = t.id) items,
       (SELECT COUNT(*) FROM checklist_items i JOIN checklist_sections s ON s.id = i.section_id WHERE s.template_id = t.id AND i.photo = 'required') photos_required,
+      (SELECT SUM(i.minutes) FROM checklist_items i JOIN checklist_sections s ON s.id = i.section_id WHERE s.template_id = t.id) total_minutes,
       (SELECT MAX(date) FROM checklist_runs r WHERE r.template_id = t.id) last_run
     FROM checklist_templates t ${all ? '' : 'WHERE t.active = 1'} ORDER BY t.active DESC, t.name`).all();
 }
@@ -28,7 +32,7 @@ function getTemplate(db, id) {
   const t = db.prepare('SELECT * FROM checklist_templates WHERE id = ?').get(id);
   if (!t) return null;
   t.sections = db.prepare('SELECT id, title FROM checklist_sections WHERE template_id = ? ORDER BY position').all(id)
-    .map(s => ({ ...s, items: db.prepare('SELECT id, text, details, photo FROM checklist_items WHERE section_id = ? ORDER BY position').all(s.id) }));
+    .map(s => ({ ...s, items: db.prepare('SELECT id, text, details, photo, minutes FROM checklist_items WHERE section_id = ? ORDER BY position').all(s.id) }));
   return t;
 }
 
@@ -41,26 +45,29 @@ function saveTemplate(db, data, id = null) {
       title: String(s.title || '').trim(),
       items: (Array.isArray(s.items) ? s.items : [])
         .map(i => (typeof i === 'string' ? { text: i } : i))
-        .map(i => ({ text: String(i.text || '').trim(), details: String(i.details || '').trim() || null, photo: PHOTO_OPTS.includes(i.photo) ? i.photo : 'none' }))
+        .map(i => ({ text: String(i.text || '').trim(), details: String(i.details || '').trim() || null, photo: PHOTO_OPTS.includes(i.photo) ? i.photo : 'none', minutes: mins(i.minutes) }))
         .filter(i => i.text)
     }))
     .filter(s => s.title || s.items.length);
   if (!sections.some(s => s.items.length)) throw bad('צריך לפחות סעיף אחד עם משימה');
 
   return db.transaction(() => {
-    const vals = [name, data.role || null, data.description || null, data.notes || null, data.active === false || data.active === 0 ? 0 : 1];
+    const vals = [name, data.role || null, data.description || null, data.notes || null, data.active === false || data.active === 0 ? 0 : 1,
+      hhmm(data.start_time), hhmm(data.deadline)];
+    // importing a list with an existing name updates it instead of creating a copy
+    if (!id && data.replace_by_name) id = db.prepare('SELECT id FROM checklist_templates WHERE name = ?').get(name)?.id || null;
     if (id) {
       if (!db.prepare('SELECT 1 FROM checklist_templates WHERE id = ?').get(id)) throw bad('הרשימה לא נמצאה', 404);
-      db.prepare('UPDATE checklist_templates SET name=?, role=?, description=?, notes=?, active=? WHERE id=?').run(...vals, id);
+      db.prepare('UPDATE checklist_templates SET name=?, role=?, description=?, notes=?, active=?, start_time=?, deadline=? WHERE id=?').run(...vals, id);
       db.prepare('DELETE FROM checklist_sections WHERE template_id = ?').run(id);
     } else {
-      id = Number(db.prepare('INSERT INTO checklist_templates(name, role, description, notes, active) VALUES (?,?,?,?,?)').run(...vals).lastInsertRowid);
+      id = Number(db.prepare('INSERT INTO checklist_templates(name, role, description, notes, active, start_time, deadline) VALUES (?,?,?,?,?,?,?)').run(...vals).lastInsertRowid);
     }
     const insS = db.prepare('INSERT INTO checklist_sections(template_id, position, title) VALUES (?,?,?)');
-    const insI = db.prepare('INSERT INTO checklist_items(section_id, position, text, details, photo) VALUES (?,?,?,?,?)');
+    const insI = db.prepare('INSERT INTO checklist_items(section_id, position, text, details, photo, minutes) VALUES (?,?,?,?,?,?)');
     sections.forEach((s, si) => {
       const sid = insS.run(id, si, s.title || `סעיף ${si + 1}`).lastInsertRowid;
-      s.items.forEach((it, ii) => insI.run(sid, ii, it.text, it.details, it.photo));
+      s.items.forEach((it, ii) => insI.run(sid, ii, it.text, it.details, it.photo, it.minutes));
     });
     return { id, sections: sections.length, items: sections.reduce((a, s) => a + s.items.length, 0) };
   })();
@@ -81,10 +88,11 @@ function startRun(db, { template_id, employee, date }) {
   const existing = db.prepare('SELECT id FROM checklist_runs WHERE template_id = ? AND employee = ? AND date = ? ORDER BY id DESC LIMIT 1').get(t.id, who, date);
   if (existing) return { id: existing.id, resumed: true };
   return db.transaction(() => {
-    const id = Number(db.prepare('INSERT INTO checklist_runs(template_id, template_name, date, employee) VALUES (?,?,?,?)').run(t.id, t.name, date, who).lastInsertRowid);
-    const ins = db.prepare('INSERT INTO checklist_run_items(run_id, position, section, text, details, photo) VALUES (?,?,?,?,?,?)');
+    const id = Number(db.prepare('INSERT INTO checklist_runs(template_id, template_name, date, employee, start_time, deadline) VALUES (?,?,?,?,?,?)')
+      .run(t.id, t.name, date, who, t.start_time, t.deadline).lastInsertRowid);
+    const ins = db.prepare('INSERT INTO checklist_run_items(run_id, position, section, text, details, photo, minutes) VALUES (?,?,?,?,?,?,?)');
     let pos = 0;
-    for (const s of t.sections) for (const i of s.items) ins.run(id, pos++, s.title, i.text, i.details, i.photo);
+    for (const s of t.sections) for (const i of s.items) ins.run(id, pos++, s.title, i.text, i.details, i.photo, i.minutes);
     return { id, resumed: false };
   })();
 }
@@ -95,7 +103,8 @@ const RUN_STATS = `
   (SELECT COUNT(*) FROM checklist_photos p JOIN checklist_run_items i ON i.id = p.run_item_id WHERE i.run_id = r.id) photos,
   (SELECT COUNT(*) FROM checklist_run_items i WHERE i.run_id = r.id AND i.photo = 'required'
      AND NOT EXISTS (SELECT 1 FROM checklist_photos p WHERE p.run_item_id = i.id)) missing_photos,
-  (SELECT COUNT(*) FROM checklist_run_items i WHERE i.run_id = r.id AND i.note IS NOT NULL AND i.note <> '') notes`;
+  (SELECT COUNT(*) FROM checklist_run_items i WHERE i.run_id = r.id AND i.note IS NOT NULL AND i.note <> '') notes,
+  (SELECT SUM(i.minutes) FROM checklist_run_items i WHERE i.run_id = r.id) total_minutes`;
 
 function listRuns(db, { from, to }) {
   return db.prepare(`SELECT r.*, ${RUN_STATS} FROM checklist_runs r WHERE r.date BETWEEN ? AND ? ORDER BY r.date DESC, r.started_at DESC`).all(from, to);

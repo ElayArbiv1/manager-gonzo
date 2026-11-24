@@ -57,3 +57,18 @@ test('validation', () => {
   const t = cl.saveTemplate(db, TEMPLATE);
   assert.throws(() => cl.startRun(db, { template_id: t.id, employee: ' ', date: '2026-11-24' }), /שם/);
 });
+
+test('time estimates, schedule and re-import by name', () => {
+  const db = openDb(':memory:');
+  const tpl = { name: 'פתיחה', start_time: '17:30', deadline: '19:00', sections: [{ title: 'א', items: [{ text: 'משימה 1', minutes: 10 }, { text: 'משימה 2', minutes: '5' }, { text: 'בלי הערכה' }] }] };
+  const t = cl.saveTemplate(db, tpl);
+  assert.equal(cl.listTemplates(db)[0].total_minutes, 15);
+  assert.throws(() => cl.saveTemplate(db, { ...tpl, start_time: '25:00' }), /שעה לא תקינה/);
+  // importing again with the same name updates the list instead of adding a copy
+  cl.saveTemplate(db, { ...tpl, replace_by_name: true, sections: [{ title: 'א', items: [{ text: 'משימה 1', minutes: 20 }] }] });
+  assert.equal(cl.listTemplates(db).length, 1);
+  assert.equal(cl.listTemplates(db)[0].total_minutes, 20);
+  const run = cl.startRun(db, { template_id: t.id, employee: 'דנה', date: '2026-11-24' });
+  const r = cl.getRun(db, run.id);
+  assert.deepEqual([r.start_time, r.deadline, r.total_minutes, r.items[0].minutes], ['17:30', '19:00', 20, 20]);
+});

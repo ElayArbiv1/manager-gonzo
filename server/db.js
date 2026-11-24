@@ -298,6 +298,12 @@ function migrate(db) {
   // sales rows that are totals for a period (weekly report) carry its first day; `date` is the day they're stored on
   if (!hasCol('sales', 'period_from')) db.exec('ALTER TABLE sales ADD COLUMN period_from TEXT');
   if (!hasCol('roles', 'weekday_rates')) db.exec('ALTER TABLE roles ADD COLUMN weekday_rates TEXT');   // JSON {"d4": 350}
+  if (!hasCol('checklist_items', 'minutes')) db.exec('ALTER TABLE checklist_items ADD COLUMN minutes INTEGER');
+  if (!hasCol('checklist_run_items', 'minutes')) db.exec('ALTER TABLE checklist_run_items ADD COLUMN minutes INTEGER');
+  if (!hasCol('checklist_templates', 'start_time')) db.exec('ALTER TABLE checklist_templates ADD COLUMN start_time TEXT');   // HH:MM
+  if (!hasCol('checklist_templates', 'deadline')) db.exec('ALTER TABLE checklist_templates ADD COLUMN deadline TEXT');       // HH:MM
+  if (!hasCol('checklist_runs', 'start_time')) db.exec('ALTER TABLE checklist_runs ADD COLUMN start_time TEXT');
+  if (!hasCol('checklist_runs', 'deadline')) db.exec('ALTER TABLE checklist_runs ADD COLUMN deadline TEXT');
   if (!hasCol('shifts', 'topup')) db.exec('ALTER TABLE shifts ADD COLUMN topup REAL');   // minimum-wage top-up from the shift app
   // make sure every role seen in shifts / employees has a row
   syncRoles(db);

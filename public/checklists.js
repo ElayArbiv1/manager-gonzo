@@ -7,6 +7,24 @@ const PHOTO_LABEL = { none: 'בלי תמונה', optional: 'תמונה אופצ�
 const hm = ts => (ts ? new Date(ts.replace(' ', 'T') + 'Z').toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '');
 const hashParams = () => new URLSearchParams(location.hash.split('?')[1] || '');
 const pctOf = r => (r.total ? Math.round((r.done / r.total) * 100) : 0);
+const addMin = (t, m) => { const [h, mm] = t.split(':').map(Number); const x = h * 60 + mm + m; return `${String(Math.floor(x / 60) % 24).padStart(2, '0')}:${String(x % 60).padStart(2, '0')}`; };
+const durText = m => (m >= 60 ? `${Math.floor(m / 60)} ש׳${m % 60 ? ` ו-${m % 60} דק׳` : ''}` : `${m} דק׳`);
+/** Target finish time for each task: list start time + the estimates of all tasks up to it. */
+function schedule(items, start) {
+  let acc = 0;
+  return Object.fromEntries(items.map(i => { acc += i.minutes || 0; return [i.id, start && i.minutes != null ? addMin(start, acc) : null]; }));
+}
+const atLocal = (date, t) => new Date(`${date}T${t}:00`);
+/** Finished vs. deadline: "בזמן" / "איחור N דק׳" / null */
+function vsDeadline(r) {
+  if (!r.deadline) return null;
+  const dl = atLocal(r.date, r.deadline);
+  if (r.completed_at) {
+    const late = Math.round((new Date(r.completed_at.replace(' ', 'T') + 'Z') - dl) / 60000);
+    return late > 0 ? { late: true, text: `איחור ${durText(late)}` } : { late: false, text: 'בזמן' };
+  }
+  return Date.now() > dl ? { late: true, text: 'לא הסתיים בזמן' } : null;
+}
 
 /** Shrinks a photo in the browser before upload (phones take 4-12MB photos). */
 async function shrinkImage(file, max = 1600) {
@@ -54,6 +72,7 @@ views.checklists = {
         <button class="card cl-card" data-t="${t.id}">
           <div class="cl-card-title">${esc(t.name)}</div>
           <div class="muted">${t.role ? esc(t.role) + ' · ' : ''}${t.items} משימות${t.photos_required ? ` · ${t.photos_required} תמונות חובה` : ''}</div>
+          ${t.start_time || t.total_minutes ? `<div class="muted" style="margin-top:4px">⏱ ${t.start_time ? `${esc(t.start_time)}–${esc(t.deadline || addMin(t.start_time, t.total_minutes || 0))}` : `כ-${durText(t.total_minutes)}`}</div>` : ''}
         </button>`).join('')}</div>`
         : `<div class="card empty" style="margin-top:16px">עוד אין רשימות. <a href="#cl-templates">להוספת רשימה</a></div>`}
       ${runs.length ? `<div class="card" style="margin-top:16px"><h3>היום</h3>${runs.map(r => `
@@ -88,10 +107,22 @@ views['cl-run'] = {
       if (!s || s.title !== it.section) sections.push(s = { title: it.section, items: [] });
       s.items.push(it);
     }
+    const due = schedule(r.items, r.start_time);
+    const totalMin = r.items.reduce((a, i) => a + (i.minutes || 0), 0);
+    const isToday = r.date === iso(new Date());
     const draw = () => {
       const done = r.items.filter(i => i.done).length;
       const missing = r.items.filter(i => i.photo === 'required' && !i.photos.length).length;
-      $('#cl-progress-text').textContent = `${done} מתוך ${r.items.length} משימות${missing ? ` · חסרות ${missing} תמונות חובה` : ''}`;
+      // where we should be by now according to the schedule
+      const now = new Date();
+      const expected = isToday && r.start_time ? r.items.filter(i => due[i.id] && atLocal(r.date, due[i.id]) <= now).length : null;
+      const behind = expected != null && !r.completed_at ? expected - r.items.filter(i => i.done && due[i.id] && atLocal(r.date, due[i.id]) <= now).length : 0;
+      $('#cl-progress-text').innerHTML = esc(`${done} מתוך ${r.items.length} משימות${missing ? ` · חסרות ${missing} תמונות חובה` : ''}`)
+        + (expected != null && !r.completed_at ? (behind > 0 ? ` · <span class="error">${behind} משימות מאחרות לפי הלו״ז</span>` : ' · <span style="color:var(--good)">בזמן ✓</span>') : '');
+      $$('.cl-item', el).forEach(itemEl => {
+        const it = r.items.find(i => i.id === Number(itemEl.dataset.item));
+        itemEl.classList.toggle('late', Boolean(isToday && !it.done && due[it.id] && atLocal(r.date, due[it.id]) < now && !r.completed_at));
+      });
       $('#cl-bar').style.width = `${r.items.length ? (done / r.items.length) * 100 : 0}%`;
       sections.forEach((s, si) => {
         const n = s.items.filter(i => i.done).length;
@@ -104,7 +135,8 @@ views['cl-run'] = {
       <div class="card cl-head">
         <div class="row" style="justify-content:space-between;align-items:center">
           <div><b style="font-size:18px">${esc(r.template_name)}</b>
-            <div class="muted">${esc(r.employee)} · ${dmy(r.date)} · התחיל ${hm(r.started_at)}${r.completed_at ? ` · ✅ הושלם ${hm(r.completed_at)}` : ''}</div></div>
+            <div class="muted">${esc(r.employee)} · ${dmy(r.date)} · התחיל ${hm(r.started_at)}${r.completed_at ? ` · ✅ הושלם ${hm(r.completed_at)}` : ''}</div>
+            ${totalMin ? `<div class="muted">⏱ ${r.start_time ? `${esc(r.start_time)}–${esc(r.deadline || addMin(r.start_time, totalMin))} · ` : ''}הערכה ${durText(totalMin)}${vsDeadline(r) ? ` · <span class="${vsDeadline(r).late ? 'error' : ''}">${vsDeadline(r).text}</span>` : ''}</div>` : ''}</div>
           <a class="btn small ghost" href="#checklists">← לרשימות</a>
         </div>
         <div class="progress"><span id="cl-bar"></span></div>
@@ -118,7 +150,8 @@ views['cl-run'] = {
             <div class="cl-item ${it.done ? 'done' : ''}" data-item="${it.id}">
               <label class="cl-check"><input type="checkbox" ${it.done ? 'checked' : ''}><span class="cl-box"></span>
                 <span class="cl-text">${esc(it.text)}${it.photo === 'required' ? ' <span class="pill bad">📷 חובה</span>' : ''}
-                  ${it.done_at ? `<span class="muted cl-time">${hm(it.done_at)}</span>` : ''}</span></label>
+                  ${it.minutes != null ? `<span class="cl-eta">⏱ ${durText(it.minutes)}${due[it.id] ? ` · עד ${due[it.id]}` : ''}</span>` : ''}
+                  ${it.done_at ? `<span class="muted cl-time">✓ ${hm(it.done_at)}</span>` : ''}</span></label>
               ${it.details ? `<div class="cl-details">${esc(it.details).split('\n').map(l => `<div>${l}</div>`).join('')}</div>` : ''}
               <div class="cl-photos">${it.photos.map(p => `<img src="/api/checklists/photos/${p.id}" data-photo="${p.id}" loading="lazy" alt="">`).join('')}</div>
               <div class="cl-actions">
@@ -133,6 +166,8 @@ views['cl-run'] = {
         <button class="btn primary" id="cl-finish">${r.completed_at ? 'עדכון סיום' : '✅ סיום'}</button>
       </div>`;
     draw();
+    // keep "late" markers current while the page is open
+    const timer = setInterval(() => { if (!document.body.contains(el) || !$('#cl-progress-text')) return clearInterval(timer); draw(); }, 60000);
 
     const find = itemEl => r.items.find(i => i.id === Number(itemEl.dataset.item));
     $$('.cl-item', el).forEach(itemEl => {
@@ -195,10 +230,11 @@ views['cl-review'] = {
     for (const r of runs) (byDate[r.date] ||= []).push(r);
     el.innerHTML = clTabs('cl-review') + (runs.length ? Object.entries(byDate).map(([date, rs]) => `
       <div class="card" style="margin-top:12px"><h3>${esc(DAY_NAMES_HE[new Date(date + 'T12:00:00').getDay()])} ${dmy(date)}</h3>
-        <div class="table-wrap"><table><thead><tr><th>רשימה</th><th>עובד</th><th>התחיל</th><th>סיים</th><th>ביצוע</th><th>תמונות</th><th>הערות</th><th></th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th>רשימה</th><th>עובד</th><th>התחיל</th><th>סיים</th><th>מול היעד</th><th>ביצוע</th><th>תמונות</th><th>הערות</th><th></th></tr></thead><tbody>
           ${rs.map(r => `<tr>
             <td><b>${esc(r.template_name)}</b></td><td>${esc(r.employee)}</td><td>${hm(r.started_at)}</td>
             <td>${r.completed_at ? hm(r.completed_at) : '<span class="pill">בתהליך</span>'}</td>
+            <td>${(v => (v ? `<span class="pill ${v.late ? 'bad' : 'good'}">${esc(v.text)}</span>` : (r.deadline ? `<span class="muted">יעד ${esc(r.deadline)}</span>` : '')))(vsDeadline(r))}</td>
             <td class="${pctOf(r) < 100 ? 'bad' : 'good'}">${pctOf(r)}% (${r.done}/${r.total})</td>
             <td>${r.photos}${r.missing_photos ? ` <span class="pill bad">חסרות ${r.missing_photos}</span>` : ''}</td>
             <td>${r.notes || r.note ? `💬 ${r.notes + (r.note ? 1 : 0)}` : ''}</td>
@@ -231,6 +267,7 @@ views['cl-templates'] = {
       <div class="card" style="margin-top:12px">${table([
         { key: 'name', label: 'רשימה', html: (v, t) => `<b>${esc(v)}</b>${t.active ? '' : ' <span class="pill">לא פעילה</span>'}` },
         { key: 'role', label: 'למי' }, { key: 'items', label: 'משימות', fmt: num }, { key: 'photos_required', label: 'תמונות חובה', fmt: num },
+        { key: 'total_minutes', label: 'זמן משוער', html: (v, t) => (v ? esc(durText(v)) + (t.start_time ? ` <span class="muted">(${esc(t.start_time)}–${esc(t.deadline || addMin(t.start_time, v))})</span>` : '') : '-') },
         { key: 'last_run', label: 'מולאה לאחרונה', fmt: dmy },
         { key: 'id', label: '', html: id => `<a class="btn small" href="#cl-templates?edit=${id}">עריכה</a> <button class="btn small" data-export="${id}">ייצוא</button> <button class="btn small danger" data-del="${id}">מחיקה</button>` }
       ], list, { empty: 'אין רשימות עדיין' })}</div>`;
@@ -238,13 +275,15 @@ views['cl-templates'] = {
       try {
         const data = JSON.parse(await e.target.files[0].text());
         const arr = Array.isArray(data) ? data : [data];
-        for (const t of arr) await api('/api/checklists/templates', { method: 'POST', body: t });
-        toast(`יובאו ${arr.length} רשימות`); render();
+        // a list with the same name is updated, not duplicated
+        for (const t of arr) await api('/api/checklists/templates', { method: 'POST', body: { ...t, replace_by_name: true } });
+        toast(`יובאו ${arr.length} רשימות (רשימות קיימות באותו שם עודכנו)`); render();
       } catch (err) { toast(err.message || 'הקובץ לא תקין', 5000); }
     };
     $$('[data-export]', el).forEach(b => b.onclick = async () => {
       const t = await api(`/api/checklists/templates/${b.dataset.export}`);
-      const clean = { name: t.name, role: t.role, description: t.description, notes: t.notes, sections: t.sections.map(s => ({ title: s.title, items: s.items.map(i => ({ text: i.text, details: i.details, photo: i.photo })) })) };
+      const clean = { name: t.name, role: t.role, description: t.description, notes: t.notes, start_time: t.start_time, deadline: t.deadline,
+        sections: t.sections.map(s => ({ title: s.title, items: s.items.map(i => ({ text: i.text, details: i.details, photo: i.photo, minutes: i.minutes })) })) };
       const a = document.createElement('a');
       a.href = URL.createObjectURL(new Blob([JSON.stringify(clean, null, 2)], { type: 'application/json' }));
       a.download = `${t.name}.json`; a.click();
@@ -262,6 +301,7 @@ async function editTemplate(el, id) {
     <div class="cl-edit-item">
       <div class="row" style="align-items:center">
         <input data-f="text" value="${esc(i.text)}" placeholder="משימה" style="flex:1;min-width:200px">
+        <label class="cl-min" title="הערכת זמן בדקות"><input data-f="minutes" type="number" min="0" step="1" value="${i.minutes ?? ''}" placeholder="דק׳" style="width:64px"> דק׳</label>
         <select data-f="photo">${Object.entries(PHOTO_LABEL).map(([k, v]) => `<option value="${k}" ${i.photo === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
         <button type="button" class="btn small ghost" data-mv="-1" title="למעלה">↑</button><button type="button" class="btn small ghost" data-mv="1" title="למטה">↓</button>
         <button type="button" class="btn small danger" data-rm>✕</button>
@@ -285,6 +325,11 @@ async function editTemplate(el, id) {
         <label>למי <input id="te-role" value="${esc(t.role || '')}" placeholder="מלצרים / בר / מטבח"></label>
         <label style="flex-direction:row;align-items:center;gap:6px;color:var(--text)"><input type="checkbox" id="te-active" ${t.active ? 'checked' : ''}> פעילה</label>
       </div>
+      <div class="row" style="margin-top:10px">
+        <label>שעת התחלה <input type="time" id="te-start" value="${esc(t.start_time || '')}"></label>
+        <label>יעד סיום <input type="time" id="te-deadline" value="${esc(t.deadline || '')}"></label>
+        <div id="te-total" class="muted" style="align-self:center"></div>
+      </div>
       <label style="margin-top:10px">כללים / הדגשים שיופיעו בראש הרשימה <textarea id="te-notes" rows="3">${esc(t.notes || '')}</textarea></label>
     </div>
     <div id="te-sections">${t.sections.map(sectionHtml).join('')}</div>
@@ -295,6 +340,20 @@ async function editTemplate(el, id) {
       <button class="btn primary" id="te-save">💾 שמירה</button>
     </div>`;
   const root = $('#te-sections');
+  const showTotal = () => {
+    const total = $$('[data-f=minutes]', root).reduce((a, i) => a + (Number(i.value) || 0), 0);
+    const start = $('#te-start').value, dl = $('#te-deadline').value;
+    let txt = total ? `סה״כ הערכה: ${durText(total)}` : 'אין עדיין הערכות זמן';
+    if (start && total) {
+      const end = addMin(start, total);
+      txt += ` · מסתיים ב-${end}`;
+      if (dl) { const diff = (atLocal('2000-01-01', dl) - atLocal('2000-01-01', end)) / 60000; txt += diff >= 0 ? ` · ${durText(diff)} מרווח עד היעד` : ` · ⚠️ ${durText(-diff)} יותר מהזמן עד היעד`; }
+    }
+    $('#te-total').textContent = txt;
+  };
+  root.addEventListener('input', e => { if (e.target.matches('[data-f=minutes]')) showTotal(); });
+  $('#te-start').oninput = $('#te-deadline').oninput = showTotal;
+  showTotal();
   root.addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -309,9 +368,10 @@ async function editTemplate(el, id) {
   $('#te-save').onclick = async () => {
     const body = {
       name: $('#te-name').value, role: $('#te-role').value, notes: $('#te-notes').value, active: $('#te-active').checked,
+      start_time: $('#te-start').value, deadline: $('#te-deadline').value,
       sections: $$('.cl-edit-section', root).map(s => ({
         title: $('[data-f=title]', s).value,
-        items: $$('.cl-edit-item', s).map(i => ({ text: $('[data-f=text]', i).value, details: $('[data-f=details]', i).value, photo: $('[data-f=photo]', i).value }))
+        items: $$('.cl-edit-item', s).map(i => ({ text: $('[data-f=text]', i).value, details: $('[data-f=details]', i).value, photo: $('[data-f=photo]', i).value, minutes: $('[data-f=minutes]', i).value }))
       }))
     };
     try {
