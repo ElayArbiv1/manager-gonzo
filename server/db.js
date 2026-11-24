@@ -240,6 +240,7 @@ function migrate(db) {
   if (!hasCol('shifts', 'tips_per_hour')) db.exec('ALTER TABLE shifts ADD COLUMN tips_per_hour REAL');
   // sales rows that are totals for a period (weekly report) carry its first day; `date` is the day they're stored on
   if (!hasCol('sales', 'period_from')) db.exec('ALTER TABLE sales ADD COLUMN period_from TEXT');
+  if (!hasCol('roles', 'weekday_rates')) db.exec('ALTER TABLE roles ADD COLUMN weekday_rates TEXT');   // JSON {"d4": 350}
   if (!hasCol('shifts', 'topup')) db.exec('ALTER TABLE shifts ADD COLUMN topup REAL');   // minimum-wage top-up from the shift app
   // make sure every role seen in shifts / employees has a row
   syncRoles(db);

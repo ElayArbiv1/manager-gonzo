@@ -35,23 +35,26 @@ function ctx(db) {
 /*
  * Business labor cost per shift row, in order of precedence:
  *   1. role paid from tips (waiters / bartenders)        → 0 (the tips pay them)
- *   2. explicit cost column in the shift file            → as is
- *   3. personal hourly wage on the employee              → hours × wage × employer factor
- *   4. role rate: per shift                              → rate (full cost to the business)
- *               per hour                                 → hours × rate
- * Tip-funded hours get a minimum-wage top-up per day, see dailyRows().
+ *   2. personal hourly wage on the employee              → hours × wage × employer factor
+ *   3. role cost entered by the owner (full cost to the business), optionally per weekday:
+ *        per shift → rate        per hour → hours × rate
+ *   4. cost column from the shift app's report           → as is
+ * Plus the shift app's minimum-wage top-up ("השלמה") when present; otherwise tip-funded
+ * hours get an estimated top-up per day, see dailyRows().
  */
 const ROLE = `COALESCE(NULLIF(sh.role, ''), e.role)`;
 const PERSONAL_RATE = `COALESCE(NULLIF(sh.hourly_rate, 0), NULLIF(e.hourly_rate, 0))`;
 const IS_TIPS = `(r.pay_type = 'tips')`;
+// weekday override, e.g. {"d4": 350, "d5": 350} = Thursday and Friday (0 = Sunday)
+const ROLE_RATE = `COALESCE(json_extract(r.weekday_rates, '$.d' || strftime('%w', sh.date)), r.rate)`;
 const LABOR_COST = `((CASE
-  WHEN sh.cost IS NOT NULL THEN sh.cost
   WHEN ${IS_TIPS} THEN 0
   WHEN ${PERSONAL_RATE} IS NOT NULL THEN sh.hours * ${PERSONAL_RATE} * @factor
-  WHEN r.pay_type = 'shift' THEN COALESCE(r.rate, 0)
-  WHEN r.pay_type = 'hourly' THEN sh.hours * COALESCE(r.rate, 0)
+  WHEN r.pay_type = 'shift' AND ${ROLE_RATE} IS NOT NULL THEN ${ROLE_RATE}
+  WHEN r.pay_type = 'hourly' AND ${ROLE_RATE} IS NOT NULL THEN sh.hours * ${ROLE_RATE}
+  WHEN sh.cost IS NOT NULL THEN sh.cost
   ELSE 0 END) + COALESCE(sh.topup, 0))`;
-const NO_RATE = `(r.pay_type IS NULL OR NOT ${IS_TIPS}) AND sh.cost IS NULL AND ${PERSONAL_RATE} IS NULL AND r.rate IS NULL`;
+const NO_RATE = `(r.pay_type IS NULL OR NOT ${IS_TIPS}) AND sh.cost IS NULL AND ${PERSONAL_RATE} IS NULL AND ${ROLE_RATE} IS NULL`;
 const LABOR_FROM = `FROM shifts sh LEFT JOIN employees e ON e.name = sh.employee LEFT JOIN roles r ON r.name = ${ROLE}`;
 
 function dailyRows(db, from, to) {
@@ -212,13 +215,13 @@ function fmtDate(d) { const [y, m, day] = d.split('-'); return `${day}/${m}`; }
 function labor(db, from, to) {
   const { factor, minWage } = ctx(db);
   const p = { from, to, factor };
-  const payType = `CASE WHEN ${IS_TIPS} THEN 'tips' WHEN sh.cost IS NOT NULL THEN 'file' WHEN ${PERSONAL_RATE} IS NOT NULL THEN 'personal' ELSE r.pay_type END`;
+  const payType = `CASE WHEN ${IS_TIPS} THEN 'tips' WHEN ${PERSONAL_RATE} IS NOT NULL THEN 'personal' WHEN ${ROLE_RATE} IS NOT NULL THEN r.pay_type WHEN sh.cost IS NOT NULL THEN 'file' ELSE r.pay_type END`;
   const byEmployee = db.prepare(`SELECT sh.employee, MAX(${ROLE}) role, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost,
       MAX(${PERSONAL_RATE}) rate, MAX(${payType}) pay_type, SUM(sh.tips) tips
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to GROUP BY sh.employee ORDER BY hours DESC`).all(p)
     .map(r => ({ ...r, hours: r2(r.hours), cost: r2(r.cost), tips: r.tips == null ? null : r2(r.tips) }));
   const byRole = db.prepare(`SELECT COALESCE(${ROLE}, 'לא מוגדר') role,
-      CASE WHEN MAX(r.pay_type) = 'tips' THEN 'tips' WHEN SUM(CASE WHEN sh.cost IS NULL THEN 1 ELSE 0 END) = 0 THEN 'file' ELSE MAX(r.pay_type) END pay_type, MAX(r.rate) rate, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost
+      CASE WHEN MAX(r.pay_type) = 'tips' THEN 'tips' WHEN MAX(r.rate) IS NULL AND MAX(r.weekday_rates) IS NULL AND SUM(CASE WHEN sh.cost IS NULL THEN 1 ELSE 0 END) = 0 THEN 'file' ELSE MAX(r.pay_type) END pay_type, MAX(r.rate) rate, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to GROUP BY 1 ORDER BY cost DESC`).all(p)
     .map(r => ({ ...r, hours: r2(r.hours), cost: r2(r.cost) }));
   const list = db.prepare(`SELECT sh.date, sh.employee, ${ROLE} role, sh.start, sh.end, sh.hours, ${LABOR_COST} cost, ${IS_TIPS} AS tip_funded, sh.tips

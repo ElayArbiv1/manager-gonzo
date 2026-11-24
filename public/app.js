@@ -534,11 +534,12 @@ views.employees = {
       <div class="card">
         <h3>תפקידים ועלויות</h3>
         <p class="muted" style="margin-top:0;font-size:13px">מלצרים וברמנים משולמים מהטיפים, ולכן הם לא נספרים בעלות העבודה של העסק. מה שנספר עבורם הוא רק השלמה לשכר מינימום, אם השעתי יצא נמוך ממנו. לשאר התפקידים: אם דוח ShiftOrganizer כולל עמודת עלות, היא נלקחת ממנו ואין צורך להזין כאן. אחרת מזינים את <b>העלות המלאה לעסק</b>, למשמרת או לשעה. תפקידים נוספים לכאן אוטומטית מדוח המשמרות.</p>
-        ${roles.length ? `<div class="table-wrap"><table class="edit-table"><thead><tr><th>תפקיד</th><th>אופן תשלום</th><th>עלות לעסק (₪)</th><th>משמרות ב-60 יום</th><th></th></tr></thead><tbody>
+        ${roles.length ? `<div class="table-wrap"><table class="edit-table"><thead><tr><th>תפקיד</th><th>אופן תשלום</th><th>עלות לעסק (₪)</th><th>חריגים לפי יום</th><th>משמרות ב-60 יום</th><th></th></tr></thead><tbody>
           ${roles.map(r => `<tr data-role="${r.id}">
             <td><b>${esc(r.name)}</b></td>
             <td><select data-k="pay_type">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${r.pay_type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
             <td><input data-k="rate" type="number" step="0.01" min="0" value="${r.rate ?? ''}" style="width:110px" placeholder="${r.pay_type === 'tips' ? '—' : 'לא הוזן'}" ${r.pay_type === 'tips' ? 'disabled' : ''}></td>
+            <td><input data-k="weekday_rates" value="${esc(r.weekday_rates_text || '')}" style="width:130px" placeholder="${r.pay_type === 'tips' ? '—' : 'למשל ה=350, ו=350'}" title="עלות שונה בימים מסוימים. א=ראשון … ש=שבת" ${r.pay_type === 'tips' ? 'disabled' : ''}></td>
             <td>${r.shifts_60d}</td>
             <td><button class="btn small" data-saverole>שמירה</button></td></tr>`).join('')}
         </tbody></table></div>` : '<div class="empty">אין תפקידים עדיין. הם יתווספו מדוח המשמרות, או הוסיפו ידנית</div>'}
@@ -571,11 +572,11 @@ views.employees = {
           </tr>`).join('')}</tbody></table></div>` : '<div class="empty">אין עובדים. הם יתווספו אוטומטית כשתייבאו דוח משמרות</div>'}
       </div>`;
     $$('tr[data-role]', el).forEach(tr => {
-      const sel = $('[data-k=pay_type]', tr), rate = $('[data-k=rate]', tr);
-      sel.onchange = () => { rate.disabled = sel.value === 'tips'; rate.placeholder = sel.value === 'tips' ? '—' : 'לא הוזן'; };
+      const sel = $('[data-k=pay_type]', tr), rate = $('[data-k=rate]', tr), days = $('[data-k=weekday_rates]', tr);
+      sel.onchange = () => { rate.disabled = days.disabled = sel.value === 'tips'; rate.placeholder = sel.value === 'tips' ? '—' : 'לא הוזן'; };
       $('[data-saverole]', tr).onclick = async () => {
         try {
-          await api(`/api/roles/${tr.dataset.role}`, { method: 'PUT', body: { pay_type: sel.value, rate: sel.value === 'tips' ? '' : rate.value } });
+          await api(`/api/roles/${tr.dataset.role}`, { method: 'PUT', body: { pay_type: sel.value, rate: sel.value === 'tips' ? '' : rate.value, weekday_rates: sel.value === 'tips' ? '' : days.value } });
           toast('נשמר');
         } catch (err) { toast(err.message); }
       };

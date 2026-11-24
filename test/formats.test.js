@@ -122,3 +122,23 @@ test('weekly totals: days in the period get the weekly tips per hour, no fake da
   assert.equal(s.totals.sales, 20000);
   assert.ok(!s.alerts.some(a => /אין מכירות/.test(a.text)));
 });
+
+test('owner role costs beat the report cost; weekday override; trainees are not tip-funded', async () => {
+  const roles = require('../server/roles');
+  const db = openDb(':memory:');
+  formats.commitFormat(db, await formats.detectFormat(await shiftWorkbook(), 's.xlsx'), {});
+  // Sunday 22/11: manager 10h (report cost 400), waitress 5h (tips, report top-up 20), cook: 'אירוע' 2h + 'מטבח' 6h
+  roles.saveRole(db, { name: 'מטבח', pay_type: 'hourly', rate: 50 });
+  roles.saveRole(db, { name: 'אירוע', pay_type: 'shift', rate: 200 });
+  roles.saveRole(db, { name: 'מנהל', pay_type: 'shift', rate: 400, weekday_rates: 'א=350' });   // Sunday override for the test
+  assert.equal(roles.formatWeekdayRates(db.prepare("SELECT weekday_rates FROM roles WHERE name = 'מנהל'").get().weekday_rates), 'א=350');
+  const day = reports.summary(db, '2026-11-22', '2026-11-22').days[0];
+  assert.equal(day.labor_cost, 350 + 6 * 50 + 200 + 20);
+  assert.equal(db.prepare("SELECT pay_type FROM roles WHERE name = 'התלמדות בר'").get(), undefined);
+  db.prepare("INSERT INTO roles(name, pay_type) VALUES ('התלמדות בר', 'shift')").run();
+  const { syncRoles } = require('../server/db');
+  db.prepare("INSERT INTO shifts(source, date, employee, role, hours) VALUES ('shift', '2026-11-23', 'x', 'התלמדות מלצר', 2)").run();
+  syncRoles(db);
+  assert.equal(db.prepare("SELECT pay_type FROM roles WHERE name = 'התלמדות מלצר'").get().pay_type, 'shift');
+  assert.throws(() => roles.parseWeekdayRates('חמישי 350'), /לא הבנתי/);
+});

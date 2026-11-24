@@ -11,6 +11,7 @@ const auth = require('./auth');
 const connectors = require('./connectors');
 const inventory = require('./inventory');
 const formats = require('./formats');
+const roles = require('./roles');
 const emailConnector = require('./connectors/email');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -174,25 +175,9 @@ function createApp(db = openDb()) {
   });
 
   // ---------- roles: how each role is paid ----------
-  const PAY_TYPES = ['tips', 'shift', 'hourly'];
-  app.get('/api/roles', (req, res) => {
-    syncRoles(db);
-    res.json(db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM shifts s LEFT JOIN employees e ON e.name = s.employee
-        WHERE COALESCE(NULLIF(s.role, ''), e.role) = r.name AND s.date >= date('now', '-60 day')) shifts_60d
-      FROM roles r ORDER BY CASE pay_type WHEN 'tips' THEN 0 ELSE 1 END, name`).all());
-  });
+  app.get('/api/roles', (req, res) => res.json(roles.listRoles(db)));
   const saveRole = (req, res) => {
-    const { name, pay_type, rate } = req.body;
-    if (!PAY_TYPES.includes(pay_type)) return res.status(400).json({ error: 'סוג תשלום לא תקין' });
-    const r = rate === '' || rate == null ? null : Number(rate);
-    if (r != null && !(r >= 0)) return res.status(400).json({ error: 'עלות לא תקינה' });
-    if (req.params.id) {
-      db.prepare('UPDATE roles SET pay_type = ?, rate = ? WHERE id = ?').run(pay_type, r, Number(req.params.id));
-    } else {
-      if (!String(name || '').trim()) return res.status(400).json({ error: 'שם תפקיד חובה' });
-      db.prepare('INSERT INTO roles(name, pay_type, rate) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET pay_type = excluded.pay_type, rate = excluded.rate')
-        .run(String(name).trim(), pay_type, r);
-    }
+    roles.saveRole(db, { ...req.body, id: req.params.id });
     res.json({ ok: true });
   };
   app.post('/api/roles', saveRole);
