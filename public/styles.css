@@ -135,3 +135,6 @@ td.good { color: var(--good); }
   .shell { grid-template-columns: 1fr; }
   .card { break-inside: avoid; box-shadow: none; }
 }
+.pill.good { background: color-mix(in srgb, var(--good) 15%, transparent); color: var(--good); }
+.pill.bad { background: color-mix(in srgb, var(--bad) 15%, transparent); color: var(--bad); }
+button:disabled { opacity: .5; cursor: not-allowed; }

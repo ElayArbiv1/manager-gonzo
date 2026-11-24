@@ -8,6 +8,8 @@ const imp = require('./importers');
 const reports = require('./reports');
 const { buildWorkbook } = require('./export');
 const auth = require('./auth');
+const connectors = require('./connectors');
+const emailConnector = require('./connectors/email');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -184,10 +186,37 @@ function createApp(db = openDb()) {
     res.json({ ok: true });
   });
 
+  // ---------- connectors (email now, Beecomm API later) ----------
+  app.get('/api/connectors', (req, res) => res.json(connectors.list(db)));
+  app.post('/api/connectors/:id/run', async (req, res, next) => {
+    try { res.json(await connectors.run(db, req.params.id)); } catch (e) { next(e); }
+  });
+  app.post('/api/connectors/email/test', async (req, res) => res.json(await emailConnector.testConnection()));
+  // upload a saved email (.eml) to check (dry run) or import it
+  app.post('/api/connectors/email/upload', upload.single('file'), async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'לא נבחר קובץ' });
+      const dryRun = req.body.dryRun !== 'false';
+      res.json(await emailConnector.processMessage(db, req.file.buffer, { dryRun, force: true }));
+    } catch (e) { next(e); }
+  });
+  app.get('/api/connectors/email/messages', (req, res) => {
+    res.json(db.prepare('SELECT id, message_id, sender, subject, sent_at, status, details, processed_at FROM email_messages ORDER BY id DESC LIMIT 100').all()
+      .map(m => ({ ...m, details: JSON.parse(m.details || '[]') })));
+  });
+  app.post('/api/connectors/email/messages/:id/reprocess', async (req, res, next) => {
+    try { res.json(await emailConnector.reprocess(db, Number(req.params.id))); } catch (e) { next(e); }
+  });
+  app.get('/api/connectors/runs', (req, res) => {
+    res.json(db.prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 50').all().map(r => ({ ...r, summary: JSON.parse(r.summary || 'null') })));
+  });
+
   // ---------- settings ----------
   app.get('/api/settings', (req, res) => res.json(getSettings(db)));
   app.put('/api/settings', (req, res) => {
-    const allowed = ['business_name', 'vat_percent', 'labor_target_percent', 'employer_cost_factor', 'weekly_sales_target', 'cancel_alert_percent'];
+    const allowed = ['business_name', 'vat_percent', 'labor_target_percent', 'employer_cost_factor', 'weekly_sales_target', 'cancel_alert_percent',
+      'email_enabled', 'email_interval_minutes', 'email_from_filter', 'email_subject_filter', 'email_source', 'email_mailbox', 'email_lookback_days',
+      'beecomm_api_enabled', 'beecomm_api_interval_minutes'];
     const up = db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
     for (const k of allowed) if (k in req.body) up.run(k, String(req.body[k]));
     res.json(getSettings(db));

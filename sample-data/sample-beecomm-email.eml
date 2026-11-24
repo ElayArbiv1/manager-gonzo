@@ -1,0 +1,32 @@
+From: Beecomm Reports <reports@beecomm.example>
+To: gonzo.reports@gmail.com
+Subject: =?UTF-8?B?15PXldeXINeZ15XXnteZIC0g15LXldeg15bXlSAtIDIzLzExLzIwMjY=?=
+Message-ID: <sample-20261123@beecomm.example>
+Date: Tue, 24 Nov 2026 02:05:00 +0200
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="GONZO"
+
+--GONZO
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+
+157XpteV16jXoyDXlNeT15XXlyDXlNeZ15XXnteZLiAo157XmdeZ15wg15zXk9eV15LXnteUINeR
+15zXkdeTKQ==
+--GONZO
+Content-Type: text/csv; name="z-report.csv"
+Content-Disposition: attachment; filename="z-report.csv"
+Content-Transfer-Encoding: base64
+
+77u/16rXkNeo15nXmizXnteh16TXqCDXl9ep15HXldeg15XXqizXnteh16TXqCDXodeV16LXk9eZ
+150s16HXlCLXmyDXlNeg15fXldeqLNeY15nXpNeZ150s16HXlCLXmyDXm9eV15zXnCDXnteiItee
+CjIzLzExLzIwMjYsOTYsMjIxLDMxMCwxMjQwLDEyNDgwCg==
+--GONZO
+Content-Type: text/csv; name="cancellations.csv"
+Content-Disposition: attachment; filename="cancellations.csv"
+Content-Transfer-Encoding: base64
+
+77u/16rXkNeo15nXmizXqdei15Qs16nXnSDXpNeo15nXmCzXm9ee15XXqizXodeb15XXnSzXkdeV
+15jXnCDXoiLXmSzXodeZ15HXqiDXkdeZ15jXldecLNeQ15XXqdeoINeiIteZCjIzLzExLzIwMjYs
+MjA6MTQs15TXnteR15XXqNeS16gg15LXldeg15bXlSwxLDY4LNeZ15XXodeZINec15XXmSzXmNei
+15XXqiDXlNen15zXk9eULNeg15XXoteUINeR15nXmNeV158K
+--GONZO--

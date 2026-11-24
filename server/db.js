@@ -112,6 +112,28 @@ function migrate(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- emails handled by the email connector (dedup + audit log)
+    CREATE TABLE IF NOT EXISTS email_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      message_id TEXT NOT NULL UNIQUE,
+      sender TEXT,
+      subject TEXT,
+      sent_at TEXT,
+      status TEXT NOT NULL,           -- imported | failed | no-data
+      details TEXT,                   -- JSON: per attachment / table result
+      raw_file TEXT,                  -- stored .eml under data/mail for re-processing
+      processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      connector TEXT NOT NULL,
+      status TEXT NOT NULL,           -- running | ok | error
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      finished_at TEXT,
+      summary TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY,
       value TEXT
@@ -125,7 +147,18 @@ function migrate(db) {
     employer_cost_factor: '1.25',   // social benefits on top of gross hourly rate
     week_start: '0',                // 0 = Sunday
     weekly_sales_target: '0',
-    cancel_alert_percent: '2'
+    cancel_alert_percent: '2',
+    // email connector
+    email_enabled: '0',
+    email_interval_minutes: '60',
+    email_from_filter: '',
+    email_subject_filter: '',
+    email_source: 'beecomm',
+    email_mailbox: 'INBOX',
+    email_lookback_days: '7',
+    // Beecomm API connector (stage 2)
+    beecomm_api_enabled: '0',
+    beecomm_api_interval_minutes: '360'
   };
   const ins = db.prepare('INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(defaults)) ins.run(k, v);

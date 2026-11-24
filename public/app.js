@@ -590,6 +590,140 @@ views.log = {
   }
 };
 
+const STATUS_LABELS = {
+  imported: ['יובא', 'good'], ok: ['תקין', 'good'], failed: ['נכשל', 'bad'], skipped: ['דולג', ''], 'no-data': ['אין נתונים', ''],
+  duplicate: ['כבר טופל', ''], error: ['שגיאה', 'bad'], running: ['רץ…', '']
+};
+const statusHtml = s => { const [t, c] = STATUS_LABELS[s] || [s, '']; return `<span class="pill ${c}">${esc(t)}</span>`; };
+const kindLabel = k => ({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות' }[k] || k || '');
+
+function resultsHtml(results) {
+  if (!results?.length) return '<span class="muted">לא נמצאו קבצים או טבלאות במייל</span>';
+  return results.map(r => `<div>${statusHtml(r.status)} <b>${esc(r.filename)}</b>
+    ${r.kind ? ` · ${esc(kindLabel(r.kind))}` : ''}
+    ${r.rows ? ` · ${r.rows} שורות` : ''}${r.from ? ` · ${dmy(r.from)}${r.to !== r.from ? '–' + dmy(r.to) : ''}` : ''}
+    ${r.reason ? ` · <span class="muted">${esc(r.reason)}</span>` : ''}
+    ${r.headers ? `<div class="muted" style="font-size:12px">עמודות שנמצאו: ${r.headers.map(esc).join(' | ')}</div>` : ''}</div>`).join('');
+}
+
+views.connectors = {
+  title: 'חיבורים אוטומטיים',
+  hideRange: true,
+  async render(el) {
+    const [list, s, messages] = await Promise.all([api('/api/connectors'), api('/api/settings'), api('/api/connectors/email/messages')]);
+    const email = list.find(c => c.id === 'email');
+    const bapi = list.find(c => c.id === 'beecomm-api');
+    const lastRun = c => c.last ? `${statusHtml(c.last.status)} ${new Date(c.last.started_at + 'Z').toLocaleString('he-IL')}
+      ${c.last.summary?.error ? ` · <span class="error">${esc(c.last.summary.error)}</span>` : ''}
+      ${c.last.summary?.processed != null ? ` · נבדקו ${c.last.summary.checked} מיילים, טופלו ${c.last.summary.processed}, יובאו ${c.last.summary.imported}` : ''}` : '<span class="muted">עוד לא רץ</span>';
+
+    el.innerHTML = `
+      <div class="grid two">
+        <div class="card">
+          <h3>📧 שלב 1: ייבוא דוחות מהמייל</h3>
+          <p class="muted" style="margin-top:0">האפליקציה בודקת תיבת דואר, מוצאת את הדוחות שביקום שולחת אחרי ה-Z, ומייבאת אותם לבד: קבצים מצורפים (Excel/CSV) או טבלאות בגוף המייל.</p>
+          <div class="alert ${email.configured ? 'info' : 'warn'}" style="margin-bottom:12px">
+            ${email.configured ? `תיבת דואר מחוברת: <b>${esc(email.account)}</b>` : 'תיבת הדואר עוד לא הוגדרה. צריך להגדיר בשרת את IMAP_HOST, IMAP_USER, IMAP_PASSWORD (הסבר ב-README). בינתיים אפשר לבדוק מייל לדוגמה למטה.'}
+          </div>
+          <form id="email-form" class="stack">
+            <label style="flex-direction:row;align-items:center;gap:8px;color:var(--text)"><input type="checkbox" name="email_enabled" ${s.email_enabled === '1' ? 'checked' : ''}> בדיקה אוטומטית של המייל</label>
+            <div class="row">
+              <label>כל כמה דקות <input name="email_interval_minutes" type="number" min="5" value="${esc(s.email_interval_minutes)}" style="width:100px"></label>
+              <label>כמה ימים אחורה לחפש <input name="email_lookback_days" type="number" min="1" max="60" value="${esc(s.email_lookback_days)}" style="width:100px"></label>
+              <label>תיקייה <input name="email_mailbox" value="${esc(s.email_mailbox)}" style="width:120px"></label>
+            </div>
+            <div class="row">
+              <label>רק ממייל של השולח (מכיל) <input name="email_from_filter" value="${esc(s.email_from_filter)}" placeholder="beecomm"></label>
+              <label>רק כשהנושא מכיל <input name="email_subject_filter" value="${esc(s.email_subject_filter)}" placeholder="דוח יומי"></label>
+              <label>לשמור כמקור <select name="email_source">${['beecomm', 'website', 'shift', 'wolt', 'tenbis', 'manual'].map(x => `<option value="${x}" ${s.email_source === x ? 'selected' : ''}>${esc(sourceLabel(x))}</option>`).join('')}</select></label>
+            </div>
+            <div class="row">
+              <button class="btn primary">שמירה</button>
+              <button type="button" class="btn" id="email-test" ${email.configured ? '' : 'disabled'}>בדיקת חיבור</button>
+              <button type="button" class="btn" id="email-run" ${email.configured ? '' : 'disabled'}>${email.running ? 'רץ…' : 'לבדוק מיילים עכשיו'}</button>
+            </div>
+            <div class="muted" style="font-size:13px">ריצה אחרונה: ${lastRun(email)}</div>
+            <div id="email-test-result"></div>
+          </form>
+        </div>
+
+        <div class="card">
+          <h3>🧪 בדיקת מייל לדוגמה</h3>
+          <p class="muted" style="margin-top:0">שמרו את המייל מביקום כקובץ <b>.eml</b> וגררו אותו לכאן. ב-Gmail: פותחים את המייל, ⋮ ואז "הורדת ההודעה". ב-Outlook: גוררים את המייל לשולחן העבודה. המערכת תראה מה היא מזהה בו, בלי לשמור כלום.</p>
+          <div id="eml-drop" class="dropzone">
+            <div style="font-size:28px">✉️</div>
+            <div><b>גררו לכאן קובץ ‎.eml</b> או לחצו לבחירה</div>
+            <input type="file" id="eml-file" accept=".eml,message/rfc822" hidden>
+          </div>
+          <div id="eml-result" style="margin-top:12px"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3>🔗 שלב 2: חיבור ישיר ל-API של ביקום</h3>
+        <div class="alert ${bapi.configured ? 'info' : 'warn'}">${bapi.configured ? 'פרטי API הוגדרו. המחבר מוכן למימוש לפי התיעוד של ביקום.' : 'ממתין לגישת API ותיעוד מביקום. כשיגיעו, נשלים את המחבר. הנתונים ימשיכו להיכנס לאותם דוחות, בלי כפילויות מול המייל.'}</div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3>יומן מיילים שטופלו</h3>
+        ${messages.length ? `<div class="table-wrap"><table><thead><tr><th>טופל</th><th>שולח</th><th>נושא</th><th>סטטוס</th><th>מה נמצא</th><th></th></tr></thead><tbody>
+          ${messages.map(m => `<tr>
+            <td>${esc(new Date(m.processed_at + 'Z').toLocaleString('he-IL'))}</td>
+            <td style="white-space:normal;max-width:180px;word-break:break-all">${esc(m.sender)}</td><td style="white-space:normal;max-width:200px">${esc(m.subject)}</td><td>${statusHtml(m.status)}</td>
+            <td style="white-space:normal;min-width:240px">${resultsHtml(m.details)}</td>
+            <td><button class="btn small" data-reprocess="${m.id}">עיבוד מחדש</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">עוד לא טופלו מיילים</div>'}
+      </div>`;
+
+    $('#email-form').onsubmit = async e => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      f.email_enabled = e.target.email_enabled.checked ? '1' : '0';
+      await api('/api/settings', { method: 'PUT', body: f });
+      toast('נשמר'); render();
+    };
+    $('#email-test').onclick = async () => {
+      $('#email-test-result').innerHTML = '<span class="muted">מתחבר…</span>';
+      const r = await api('/api/connectors/email/test', { method: 'POST' });
+      $('#email-test-result').innerHTML = r.ok
+        ? `<div class="alert info">החיבור הצליח. תיקיות: ${r.mailboxes.slice(0, 15).map(esc).join(', ')}</div>`
+        : `<div class="alert warn">החיבור נכשל: ${esc(r.error)}</div>`;
+    };
+    $('#email-run').onclick = async () => {
+      $('#email-run').textContent = 'בודק…'; $('#email-run').disabled = true;
+      const r = await api('/api/connectors/email/run', { method: 'POST' });
+      toast(r.status === 'ok' ? `טופלו ${r.summary.processed} מיילים, יובאו ${r.summary.imported}` : r.error || r.status, 5000);
+      render();
+    };
+    $$('[data-reprocess]', el).forEach(b => b.onclick = async () => {
+      const r = await api(`/api/connectors/email/messages/${b.dataset.reprocess}/reprocess`, { method: 'POST' });
+      toast(`עובד מחדש: ${STATUS_LABELS[r.status]?.[0] || r.status}`); render();
+    });
+
+    const drop = $('#eml-drop'), file = $('#eml-file');
+    drop.onclick = () => file.click();
+    drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+    drop.ondragleave = () => drop.classList.remove('over');
+    drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) checkEml(e.dataTransfer.files[0]); };
+    file.onchange = () => file.files[0] && checkEml(file.files[0]);
+
+    async function checkEml(f, dryRun = true) {
+      const fd = new FormData(); fd.append('file', f); fd.append('dryRun', String(dryRun));
+      try {
+        const r = await api('/api/connectors/email/upload', { method: 'POST', body: fd });
+        $('#eml-result').innerHTML = `
+          <div class="muted" style="font-size:13px">מאת: ${esc(r.from)} · נושא: ${esc(r.subject)}</div>
+          <div style="margin:8px 0">${resultsHtml(r.results)}</div>
+          ${dryRun && r.status === 'ok' ? '<button class="btn primary" id="eml-import">לייבא את המייל הזה</button>' : ''}
+          ${dryRun && r.status !== 'ok' ? '<div class="alert warn">המערכת לא זיהתה דוח שאפשר לייבא. שלחו את הקובץ למפתח כדי להתאים את הזיהוי.</div>' : ''}
+          ${!dryRun ? `<div class="alert info">${r.status === 'imported' ? 'יובא בהצלחה' : 'הסתיים: ' + esc(r.status)}</div>` : ''}`;
+        const b = $('#eml-import');
+        if (b) b.onclick = async () => { await checkEml(f, false); toast('יובא'); setTimeout(render, 1500); };
+      } catch (err) { toast(err.message, 5000); }
+    }
+  }
+};
+
 views.settings = {
   title: 'הגדרות',
   hideRange: true,
@@ -608,7 +742,7 @@ views.settings = {
       </form>
       <div class="card" style="margin-top:16px;max-width:640px">
         <h3>חיבור אוטומטי לביקום ולאפליקציית המשמרות</h3>
-        <p class="muted">כרגע הנתונים נכנסים דרך העלאת קבצים. לחיבור אוטומטי צריך גישת API מהספקים. ראו את קובץ README בפרויקט, בפרק "חיבורים אוטומטיים".</p>
+        <p class="muted">ייבוא אוטומטי מהמייל, ובהמשך חיבור API, מוגדרים במסך <a href="#connectors">חיבורים אוטומטיים</a>.</p>
       </div>`;
     $('#settings').onsubmit = async e => {
       e.preventDefault();

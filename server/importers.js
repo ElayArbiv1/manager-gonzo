@@ -383,5 +383,5 @@ function commitImport(db, { kind, source, filename, rows, replace = true }) {
 
 module.exports = {
   KINDS, parseFile, guessMapping, detectKind, normalizeRows, commitImport,
-  toDate, toTime, toHours, toNumber, hoursBetween, normHeader
+  toDate, toTime, toHours, toNumber, hoursBetween, normHeader, locateHeader
 };
