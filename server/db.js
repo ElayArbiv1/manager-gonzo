@@ -185,6 +185,63 @@ function migrate(db) {
       UNIQUE(menu_item, product_id)
     );
 
+    -- ---------- checklists ----------
+    CREATE TABLE IF NOT EXISTS checklist_templates (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      role TEXT,                       -- who fills it (waiters, bar, kitchen ...)
+      description TEXT,
+      notes TEXT,                      -- rules shown at the top (e.g. "iron rules")
+      active INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS checklist_sections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER NOT NULL REFERENCES checklist_templates(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      title TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS checklist_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      section_id INTEGER NOT NULL REFERENCES checklist_sections(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      details TEXT,                    -- sub-points, one per line
+      photo TEXT NOT NULL DEFAULT 'none' CHECK (photo IN ('none', 'optional', 'required'))
+    );
+    -- a filled checklist; items are copied in, so editing a template never changes history
+    CREATE TABLE IF NOT EXISTS checklist_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      template_id INTEGER REFERENCES checklist_templates(id) ON DELETE SET NULL,
+      template_name TEXT NOT NULL,
+      date TEXT NOT NULL,
+      employee TEXT NOT NULL,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      note TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_runs_date ON checklist_runs(date);
+    CREATE TABLE IF NOT EXISTS checklist_run_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL REFERENCES checklist_runs(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      section TEXT NOT NULL,
+      text TEXT NOT NULL,
+      details TEXT,
+      photo TEXT NOT NULL DEFAULT 'none',
+      done INTEGER NOT NULL DEFAULT 0,
+      done_at TEXT,
+      note TEXT
+    );
+    CREATE TABLE IF NOT EXISTS checklist_photos (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_item_id INTEGER NOT NULL REFERENCES checklist_run_items(id) ON DELETE CASCADE,
+      file TEXT NOT NULL,              -- path under data/photos
+      mime TEXT NOT NULL,
+      size INTEGER,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
     -- emails handled by the email connector (dedup + audit log)
     CREATE TABLE IF NOT EXISTS email_messages (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

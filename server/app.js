@@ -12,6 +12,7 @@ const connectors = require('./connectors');
 const inventory = require('./inventory');
 const formats = require('./formats');
 const roles = require('./roles');
+const checklists = require('./checklists');
 const emailConnector = require('./connectors/email');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -260,6 +261,40 @@ function createApp(db = openDb()) {
   app.get('/api/inventory/report', (req, res) => {
     res.json({ ...inventory.usageReport(db, req.query.count ? Number(req.query.count) : null), periods: inventory.periods(db) });
   });
+
+  // ---------- checklists ----------
+  const photoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+  const id = req => Number(req.params.id);
+  app.get('/api/checklists/templates', (req, res) => res.json(checklists.listTemplates(db, { all: req.query.all === '1' })));
+  app.get('/api/checklists/templates/:id', (req, res) => {
+    const t = checklists.getTemplate(db, id(req));
+    t ? res.json(t) : res.status(404).json({ error: 'לא נמצא' });
+  });
+  app.post('/api/checklists/templates', (req, res) => res.json(checklists.saveTemplate(db, req.body)));
+  app.put('/api/checklists/templates/:id', (req, res) => res.json(checklists.saveTemplate(db, req.body, id(req))));
+  app.delete('/api/checklists/templates/:id', (req, res) => { checklists.deleteTemplate(db, id(req)); res.json({ ok: true }); });
+
+  app.get('/api/checklists/runs', (req, res) => res.json(checklists.listRuns(db, { from: range(req)[0], to: range(req)[1] })));
+  app.post('/api/checklists/runs', (req, res) => res.json(checklists.startRun(db, req.body)));
+  app.get('/api/checklists/runs/:id', (req, res) => {
+    const r = checklists.getRun(db, id(req));
+    r ? res.json(r) : res.status(404).json({ error: 'לא נמצא' });
+  });
+  app.patch('/api/checklists/runs/:id/items/:itemId', (req, res) => res.json(checklists.updateItem(db, id(req), Number(req.params.itemId), req.body)));
+  app.post('/api/checklists/runs/:id/items/:itemId/photos', photoUpload.single('photo'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'לא נבחרה תמונה' });
+    res.json(checklists.addPhoto(db, id(req), Number(req.params.itemId), req.file));
+  });
+  app.post('/api/checklists/runs/:id/complete', (req, res) => res.json(checklists.completeRun(db, id(req), req.body)));
+  app.delete('/api/checklists/runs/:id', (req, res) => { checklists.deleteRun(db, id(req)); res.json({ ok: true }); });
+  app.get('/api/checklists/photos/:id', (req, res) => {
+    const f = checklists.photoFile(db, id(req));
+    if (!f) return res.status(404).json({ error: 'לא נמצא' });
+    res.setHeader('Content-Type', f.mime);
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.sendFile(f.path);
+  });
+  app.delete('/api/checklists/photos/:id', (req, res) => { checklists.deletePhoto(db, id(req)); res.json({ ok: true }); });
 
   // ---------- connectors (email now, Beecomm API later) ----------
   app.get('/api/connectors', (req, res) => res.json(connectors.list(db)));

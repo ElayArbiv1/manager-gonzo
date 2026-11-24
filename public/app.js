@@ -1244,7 +1244,7 @@ views.settings = {
 let renderSeq = 0;
 async function render() {
   const route = (location.hash || '#dashboard').slice(1).split('?')[0];
-  const navRoute = route.startsWith('inv-') && route !== 'inv-count' ? 'inventory' : route;
+  const navRoute = route.startsWith('inv-') && route !== 'inv-count' ? 'inventory' : route.startsWith('cl-') ? 'checklists' : route;
   const view = views[route] || views.dashboard;
   $$('#nav a').forEach(a => a.classList.toggle('active', a.dataset.route === navRoute));
   $('#page-title').textContent = view.title;
@@ -1295,4 +1295,4 @@ $('#logout').onclick = async () => { await api('/api/auth/logout', { method: 'PO
 window.addEventListener('hashchange', render);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', render);
 bindRange();
-boot();
+window.addEventListener('DOMContentLoaded', boot);
