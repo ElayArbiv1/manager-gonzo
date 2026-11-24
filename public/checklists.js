@@ -1,8 +1,22 @@
 'use strict';
 /* Checklists UI: fill (employee), review (manager), manage lists. Loaded after app.js; uses its helpers. */
 
+/*
+ * Also used by the standalone checklists app (checklists-app/, deployed to Netlify). There the shell sets
+ * window.CL_CONTEXT = { user: { name, phone, role } }: the name comes from the login and
+ * staff only see the "fill" tab.
+ */
+const clCtx = () => window.CL_CONTEXT || null;
+const clIsManager = () => !clCtx() || clCtx().user?.role === 'manager';
 const CL_TABS = [['checklists', 'מילוי'], ['cl-review', 'מעקב מנהל'], ['cl-templates', 'ניהול רשימות']];
-const clTabs = active => `<div class="tabs">${CL_TABS.map(([r, l]) => `<a href="#${r}" class="${r === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
+const clTabs = active => {
+  if (!clIsManager()) return '';
+  const tabs = clCtx() ? [...CL_TABS, ['cl-users', 'עובדים רשומים']] : CL_TABS;
+  return `<div class="tabs">${tabs.map(([r, l]) => `<a href="#${r}" class="${r === active ? 'active' : ''}">${l}</a>`).join('')}</div>`;
+};
+// updates to one run go one at a time, so quick taps never overwrite each other
+let clQueue = Promise.resolve();
+const clSerial = fn => (clQueue = clQueue.then(fn, fn));
 const PHOTO_LABEL = { none: 'בלי תמונה', optional: 'תמונה אופציונלית', required: 'חובה תמונה' };
 const hm = ts => (ts ? new Date(ts.replace(' ', 'T') + 'Z').toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' }) : '');
 const hashParams = () => new URLSearchParams(location.hash.split('?')[1] || '');
@@ -53,17 +67,19 @@ views.checklists = {
   hideRange: true,
   async render(el) {
     const today = iso(new Date());
+    const ctx = clCtx();
     const [templates, employees, runs] = await Promise.all([
-      api('/api/checklists/templates'), api('/api/employees'), api(`/api/checklists/runs?from=${today}&to=${today}`)
+      api('/api/checklists/templates'), ctx ? [] : api('/api/employees'), api(`/api/checklists/runs?from=${today}&to=${today}`)
     ]);
-    let me = '';
-    try { me = localStorage.getItem('gonzo-me') || ''; } catch { /* ignore */ }
+    let me = ctx?.user?.name || '';
+    if (!ctx) try { me = localStorage.getItem('gonzo-me') || ''; } catch { /* ignore */ }
     el.innerHTML = clTabs('checklists') + `
       <div class="card">
         <div class="row">
-          <label style="flex:1;min-width:200px">השם שלי
+          ${ctx ? `<div style="flex:1;min-width:200px;align-self:center"><b style="font-size:17px">שלום ${esc(me)} 👋</b><div class="muted">בחרו רשימה כדי להתחיל</div><input type="hidden" id="cl-me" value="${esc(me)}"></div>`
+            : `<label style="flex:1;min-width:200px">השם שלי
             <input id="cl-me" list="cl-emps" value="${esc(me)}" placeholder="בחרו או הקלידו שם" autocomplete="off">
-          </label>
+          </label>`}
           <label>תאריך <input type="date" id="cl-date" value="${today}"></label>
         </div>
         <datalist id="cl-emps">${employees.filter(e => e.active).map(e => `<option value="${esc(e.name)}">`).join('')}</datalist>
@@ -175,7 +191,7 @@ views['cl-run'] = {
       $('input[type=checkbox]', itemEl).onchange = async e => {
         const want = e.target.checked;
         try {
-          const u = await api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { done: want } });
+          const u = await clSerial(() => api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { done: want } }));
           it.done = Boolean(u.done); it.done_at = u.done_at;
           itemEl.classList.toggle('done', it.done);
           draw();
@@ -183,7 +199,7 @@ views['cl-run'] = {
       };
       $('[data-note]', itemEl).onclick = () => { const t = $('.cl-note', itemEl); t.classList.remove('hidden'); t.focus(); };
       $('.cl-note', itemEl).onchange = async e => {
-        await api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { note: e.target.value } });
+        await clSerial(() => api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { note: e.target.value } }));
         it.note = e.target.value; toast('ההערה נשמרה');
       };
       $('[data-upload]', itemEl).onchange = async e => {
@@ -193,13 +209,13 @@ views['cl-run'] = {
         fd.append('photo', await shrinkImage(f));
         toast('מעלה תמונה…');
         try {
-          const p = await api(`/api/checklists/runs/${r.id}/items/${it.id}/photos`, { method: 'POST', body: fd });
+          const p = await clSerial(() => api(`/api/checklists/runs/${r.id}/items/${it.id}/photos`, { method: 'POST', body: fd }));
           it.photos.push({ id: p.id });
           $('.cl-photos', itemEl).insertAdjacentHTML('beforeend', `<img src="/api/checklists/photos/${p.id}" data-photo="${p.id}" alt="">`);
           toast('התמונה נשמרה');
           // a photo is the proof for a photo task: tick it too
           if (it.photo !== 'none' && !it.done) {
-            const u = await api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { done: true } });
+            const u = await clSerial(() => api(`/api/checklists/runs/${r.id}/items/${it.id}`, { method: 'PATCH', body: { done: true } }));
             it.done = true; it.done_at = u.done_at;
             $('input[type=checkbox]', itemEl).checked = true;
             itemEl.classList.add('done');
@@ -214,7 +230,7 @@ views['cl-run'] = {
       const left = r.items.filter(i => !i.done).length;
       const missing = r.items.filter(i => i.photo === 'required' && !i.photos.length).length;
       if ((left || missing) && !confirm(`${left ? `${left} משימות לא סומנו. ` : ''}${missing ? `חסרות ${missing} תמונות חובה. ` : ''}לסיים בכל זאת? המנהל יראה מה חסר.`)) return;
-      await api(`/api/checklists/runs/${r.id}/complete`, { method: 'POST', body: { note: $('#cl-final-note').value } });
+      await clSerial(() => api(`/api/checklists/runs/${r.id}/complete`, { method: 'POST', body: { note: $('#cl-final-note').value } }));
       toast('הרשימה נשלחה למנהל ✅');
       location.hash = '#checklists';
     };
