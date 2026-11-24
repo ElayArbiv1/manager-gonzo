@@ -47,9 +47,49 @@ test('shift import computes hours, cost and labor %', async () => {
 
   const s = reports.summary(db, '2026-11-01', '2026-11-01');
   assert.equal(s.totals.labor_hours, 16);
-  assert.equal(s.totals.labor_cost, 640);
-  assert.equal(s.totals.labor_pct, 32);
+  // the waitress is paid from tips → only the cook (8h × 40) is a business cost
+  assert.equal(s.totals.labor_cost, 320);
+  assert.equal(s.totals.tip_hours, 8);
+  assert.equal(s.totals.labor_pct, 16);
   assert.equal(s.totals.avg_ticket, 100);
+});
+
+test('role rates, tip-funded roles and the shift app "שעתי"', async () => {
+  const db = openDb(':memory:');
+  db.prepare("UPDATE settings SET value = '1' WHERE key = 'employer_cost_factor'").run();
+  db.prepare("UPDATE settings SET value = '0' WHERE key = 'vat_percent'").run();
+  const csv = 'שם העובד,תפקיד,תאריך,סה"כ שעות\nדנה,מלצרית,01/11/2026,6\nיוסי,ברמן,01/11/2026,4\nרוני,מנהל משמרת,01/11/2026,9\nאבי,טבח,01/11/2026,8\n';
+  const p = await imp.parseFile(Buffer.from(csv), 's.csv');
+  imp.commitImport(db, { kind: 'shifts', source: 'shift', rows: imp.normalizeRows('shifts', p.rows, imp.guessMapping('shifts', p.headers)).rows });
+
+  const roles = Object.fromEntries(db.prepare('SELECT name, pay_type FROM roles').all().map(r => [r.name, r.pay_type]));
+  assert.deepEqual(roles, { 'מלצרית': 'tips', 'ברמן': 'tips', 'מנהל משמרת': 'shift', 'טבח': 'shift' });
+
+  // no rates yet → roles reported as missing, cost 0
+  let l = reports.labor(db, '2026-11-01', '2026-11-01');
+  assert.deepEqual(l.missingRates.sort(), ['טבח', 'מנהל משמרת']);
+
+  db.prepare("UPDATE roles SET rate = 500 WHERE name = 'מנהל משמרת'").run();                      // per shift
+  db.prepare("UPDATE roles SET pay_type = 'hourly', rate = 60 WHERE name = 'טבח'").run();          // per hour
+  imp.commitImport(db, { kind: 'sales', source: 'beecomm', rows: [{ date: '2026-11-01', amount: 5000, tips: 400 }] });
+  let d = reports.summary(db, '2026-11-01', '2026-11-01').days[0];
+  assert.equal(d.labor_cost, 500 + 8 * 60);
+  assert.equal(d.tip_hours, 10);
+  assert.equal(d.tips_per_hour, 40);                       // fallback: 400 tips / 10 hours
+  assert.equal(d.tips_per_hour_source, 'calculated');
+
+  // ShiftOrganizer's own "שעתי" wins over the calculation
+  const t = await imp.parseFile(Buffer.from('תאריך,שעתי,סה"כ טיפים\n01/11/2026,52.5,525\n'), 'tips.csv');
+  assert.equal(imp.detectKind(t.headers), 'tips_daily');
+  imp.commitImport(db, { kind: 'tips_daily', source: 'shift', rows: imp.normalizeRows('tips_daily', t.rows, imp.guessMapping('tips_daily', t.headers)).rows });
+  d = reports.summary(db, '2026-11-01', '2026-11-01').days[0];
+  assert.deepEqual([d.tips_per_hour, d.tips, d.tips_per_hour_source], [52.5, 525, 'shift_app']);
+
+  // below minimum wage → the business tops up the difference
+  db.prepare("UPDATE settings SET value = '60' WHERE key = 'min_hourly_wage'").run();
+  d = reports.summary(db, '2026-11-01', '2026-11-01').days[0];
+  assert.equal(d.tip_topup, (60 - 52.5) * 10);
+  assert.equal(d.labor_cost, 980 + 75);
 });
 
 test('re-importing the same range replaces instead of duplicating', () => {

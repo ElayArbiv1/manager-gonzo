@@ -8,8 +8,11 @@
 const path = require('path');
 const Papa = require('papaparse');
 const ExcelJS = require('exceljs');
+const { syncRoles } = require('./db');
 
 // ---------- field definitions ----------
+const TPH_SYN = ['שעתי', 'השעתי', 'שעתי טיפים', 'טיפ לשעה', 'טיפים לשעה', 'טיפ שעתי', 'ממוצע לשעה', 'tips per hour', 'tip per hour', 'hourly tips', 'tips/hour'];
+
 const KINDS = {
   sales: {
     label: 'מכירות',
@@ -58,7 +61,18 @@ const KINDS = {
       end: { label: 'יציאה', syn: ['end', 'end time', 'clock out', 'out', 'יציאה', 'שעת יציאה', 'סיום', 'שעת סיום', 'עד'] },
       hours: { label: 'שעות', syn: ['hours', 'total hours', 'duration', 'שעות', 'סה"כ שעות', 'סהכ שעות', 'סה״כ שעות', 'שעות עבודה', 'משך'] },
       hourly_rate: { label: 'שכר לשעה', syn: ['rate', 'hourly rate', 'wage', 'שכר לשעה', 'תעריף', 'תעריף שעתי', 'שכר שעתי'] },
-      cost: { label: 'עלות', syn: ['cost', 'pay', 'total pay', 'wages', 'עלות', 'שכר', 'סה"כ שכר', 'עלות משמרת', 'סכום'] }
+      cost: { label: 'עלות', syn: ['cost', 'pay', 'total pay', 'wages', 'עלות', 'שכר', 'סה"כ שכר', 'עלות משמרת', 'סכום'] },
+      tips: { label: 'טיפים', syn: ['tips', 'tip', 'טיפים', 'טיפ', 'תשר', 'סה"כ טיפים', 'טיפים נטו'] },
+      tips_per_hour: { label: 'שעתי (טיפ לשעה)', syn: TPH_SYN }
+    }
+  },
+  tips_daily: {
+    label: 'שעתי יומי (טיפים)',
+    fields: {
+      date: { label: 'תאריך', required: true, syn: ['date', 'תאריך', 'יום', 'shift date', 'תאריך משמרת'] },
+      tips_per_hour: { label: 'שעתי', required: true, syn: TPH_SYN },
+      tips: { label: 'סה״כ טיפים', syn: ['סה"כ טיפים', 'סהכ טיפים', 'סה״כ טיפים', 'טיפים', 'טיפ', 'תשר', 'tips', 'total tips'] },
+      hours: { label: 'שעות', syn: ['סה"כ שעות', 'סהכ שעות', 'שעות', 'שעות מלצרים', 'hours', 'total hours'] }
     }
   }
 };
@@ -330,8 +344,14 @@ function normalizeRows(kind, rows, mapping) {
       out.push({
         date, employee, role: str(get(row, 'role')), start, end, hours,
         hourly_rate: toNumber(get(row, 'hourly_rate')),
-        cost: toNumber(get(row, 'cost'))
+        cost: toNumber(get(row, 'cost')),
+        tips: toNumber(get(row, 'tips')),
+        tips_per_hour: toNumber(get(row, 'tips_per_hour'))
       });
+    } else if (kind === 'tips_daily') {
+      const tph = toNumber(get(row, 'tips_per_hour'));
+      if (tph == null) { errors.push({ line: i + 1, error: 'שעתי חסר' }); return; }
+      out.push({ date, tips_per_hour: tph, tips: toNumber(get(row, 'tips')), hours: toHours(get(row, 'hours')) });
     }
   });
 
@@ -344,7 +364,8 @@ const COLUMNS = {
   sales: ['date', 'hour', 'amount', 'orders', 'guests', 'discount', 'tips', 'channel', 'payment'],
   items: ['date', 'item', 'category', 'qty', 'amount'],
   cancellations: ['date', 'time', 'item', 'qty', 'amount', 'employee', 'reason', 'approved_by'],
-  shifts: ['date', 'employee', 'role', 'start', 'end', 'hours', 'hourly_rate', 'cost']
+  shifts: ['date', 'employee', 'role', 'start', 'end', 'hours', 'hourly_rate', 'cost', 'tips', 'tips_per_hour'],
+  tips_daily: ['date', 'tips_per_hour', 'tips', 'hours']
 };
 
 // values for NOT NULL columns when a row leaves them out (e.g. manual entry)
@@ -381,6 +402,7 @@ function commitImport(db, { kind, source, filename, rows, replace = true }) {
     if (kind === 'shifts') {
       const addEmp = db.prepare('INSERT OR IGNORE INTO employees(name, role, hourly_rate) VALUES (?, ?, ?)');
       for (const r of rows) addEmp.run(r.employee, r.role, r.hourly_rate ?? 0);
+      syncRoles(db);
     }
     return { importId: Number(importId), inserted: rows.length, removed, from, to };
   });

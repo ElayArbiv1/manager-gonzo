@@ -15,8 +15,13 @@ run('beecomm-items.csv', 'beecomm');
 run('beecomm-cancellations.csv', 'beecomm');
 
 const db = openDb();
-const up = db.prepare('UPDATE employees SET role = ?, hourly_rate = ? WHERE name = ?');
-for (const e of JSON.parse(fs.readFileSync(path.join(dir, 'employees-rates.json'), 'utf8'))) up.run(e.role, e.hourly_rate, e.name);
+const up = db.prepare('UPDATE employees SET role = ? WHERE name = ?');
+for (const e of JSON.parse(fs.readFileSync(path.join(dir, 'employees-rates.json'), 'utf8'))) up.run(e.role, e.name);
+// demo role costs (made-up numbers): waiters / bartenders are paid from tips automatically
+const role = db.prepare('UPDATE roles SET pay_type = ?, rate = ? WHERE name = ?');
+role.run('shift', 480, 'אחראי/ת משמרת');
+role.run('hourly', 62, 'טבח/ית');
+role.run('hourly', 45, 'שוטף/ת');
 seedInventory(db);
 console.log('נתוני הדמו נטענו.');
 

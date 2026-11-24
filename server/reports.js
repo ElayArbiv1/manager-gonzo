@@ -28,31 +28,67 @@ function ctx(db) {
   const s = getSettings(db);
   const vat = Number(s.vat_percent || 0) / 100;
   const factor = Number(s.employer_cost_factor || 1);
-  return { s, vat, factor };
+  const minWage = Number(s.min_hourly_wage) || 0;
+  return { s, vat, factor, minWage };
 }
 
-// labor cost: explicit cost from the file wins; otherwise hours x rate x employer factor
-const LABOR_COST = `COALESCE(sh.cost, sh.hours * COALESCE(NULLIF(sh.hourly_rate, 0), e.hourly_rate, 0) * @factor)`;
-const LABOR_FROM = `FROM shifts sh LEFT JOIN employees e ON e.name = sh.employee`;
+/*
+ * Business labor cost per shift row, in order of precedence:
+ *   1. role paid from tips (waiters / bartenders)        → 0 (the tips pay them)
+ *   2. explicit cost column in the shift file            → as is
+ *   3. personal hourly wage on the employee              → hours × wage × employer factor
+ *   4. role rate: per shift                              → rate (full cost to the business)
+ *               per hour                                 → hours × rate
+ * Tip-funded hours get a minimum-wage top-up per day, see dailyRows().
+ */
+const ROLE = `COALESCE(NULLIF(sh.role, ''), e.role)`;
+const PERSONAL_RATE = `COALESCE(NULLIF(sh.hourly_rate, 0), NULLIF(e.hourly_rate, 0))`;
+const IS_TIPS = `(r.pay_type = 'tips')`;
+const LABOR_COST = `(CASE
+  WHEN ${IS_TIPS} THEN 0
+  WHEN sh.cost IS NOT NULL THEN sh.cost
+  WHEN ${PERSONAL_RATE} IS NOT NULL THEN sh.hours * ${PERSONAL_RATE} * @factor
+  WHEN r.pay_type = 'shift' THEN COALESCE(r.rate, 0)
+  WHEN r.pay_type = 'hourly' THEN sh.hours * COALESCE(r.rate, 0)
+  ELSE 0 END)`;
+const NO_RATE = `(NOT ${IS_TIPS} OR r.pay_type IS NULL) AND sh.cost IS NULL AND ${PERSONAL_RATE} IS NULL AND r.rate IS NULL`;
+const LABOR_FROM = `FROM shifts sh LEFT JOIN employees e ON e.name = sh.employee LEFT JOIN roles r ON r.name = ${ROLE}`;
 
 function dailyRows(db, from, to) {
-  const { vat, factor } = ctx(db);
+  const { vat, factor, minWage } = ctx(db);
   const p = { from, to, factor };
   const sales = db.prepare(`SELECT date, SUM(amount) amount, SUM(orders) orders, SUM(guests) guests, SUM(discount) discount, SUM(tips) tips
     FROM sales WHERE date BETWEEN @from AND @to GROUP BY date`).all(p);
-  const labor = db.prepare(`SELECT sh.date, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost, COUNT(DISTINCT sh.employee) staff
+  const labor = db.prepare(`SELECT sh.date, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost, COUNT(DISTINCT sh.employee) staff,
+      SUM(CASE WHEN ${IS_TIPS} THEN sh.hours ELSE 0 END) tip_hours,
+      COUNT(DISTINCT CASE WHEN ${IS_TIPS} THEN sh.employee END) tip_staff,
+      SUM(CASE WHEN ${IS_TIPS} THEN sh.tips END) shift_tips,
+      SUM(CASE WHEN sh.tips_per_hour IS NOT NULL THEN sh.tips_per_hour * sh.hours END) / SUM(CASE WHEN sh.tips_per_hour IS NOT NULL THEN sh.hours END) shift_tph
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to GROUP BY sh.date`).all(p);
+  // "השעתי" as calculated by the shift app (ShiftOrganizer), hours-weighted when a day has several rows
+  const tipsDaily = db.prepare(`SELECT date,
+      COALESCE(SUM(tips_per_hour * hours) / SUM(hours), AVG(tips_per_hour)) tph, SUM(tips) tips, SUM(hours) hours
+    FROM tips_daily WHERE date BETWEEN @from AND @to GROUP BY date`).all(p);
   const canc = db.prepare(`SELECT date, COUNT(*) count, SUM(amount) amount FROM cancellations WHERE date BETWEEN @from AND @to GROUP BY date`).all(p);
   const exp = db.prepare(`SELECT date, SUM(amount) amount FROM expenses WHERE date BETWEEN @from AND @to GROUP BY date`).all(p);
   const by = (arr) => Object.fromEntries(arr.map(r => [r.date, r]));
-  const S = by(sales), L = by(labor), C = by(canc), E = by(exp);
+  const S = by(sales), L = by(labor), C = by(canc), E = by(exp), T = by(tipsDaily);
 
   return eachDate(from, to).map(date => {
     const gross = S[date]?.amount || 0;
     const net = gross / (1 + vat);
     const orders = S[date]?.orders || 0;
     const hours = L[date]?.hours || 0;
-    const laborCost = L[date]?.cost || 0;
+    const tipHours = L[date]?.tip_hours || T[date]?.hours || 0;
+    // השעתי: taken from the shift app when available; calculating it is only a fallback
+    const appTph = T[date]?.tph ?? L[date]?.shift_tph ?? null;
+    const knownTips = T[date]?.tips ?? L[date]?.shift_tips ?? null;
+    const tips = knownTips != null ? knownTips : appTph != null ? appTph * tipHours : (S[date]?.tips || 0);
+    const tipsPerHour = appTph != null ? appTph : tipHours ? tips / tipHours : null;
+    const tphSource = appTph != null ? 'shift_app' : tipsPerHour != null ? 'calculated' : null;
+    // the business tops tip-funded staff up to minimum wage
+    const topup = minWage && tipHours && tipsPerHour < minWage ? (minWage - tipsPerHour) * tipHours * factor : 0;
+    const laborCost = (L[date]?.cost || 0) + topup;
     const cancelAmount = C[date]?.amount || 0;
     return {
       date,
@@ -63,8 +99,14 @@ function dailyRows(db, from, to) {
       guests: S[date]?.guests || 0,
       avg_ticket: orders ? r2(gross / orders) : 0,
       discount: r2(S[date]?.discount),
-      tips: r2(S[date]?.tips),
+      tips: r2(tips),
       labor_hours: r2(hours),
+      tip_hours: r2(tipHours),
+      business_hours: r2(hours - tipHours),
+      tip_staff: L[date]?.tip_staff || 0,
+      tips_per_hour: tipsPerHour == null ? null : r2(tipsPerHour),
+      tips_per_hour_source: tphSource,
+      tip_topup: r2(topup),
       labor_cost: r2(laborCost),
       staff: L[date]?.staff || 0,
       labor_pct: pct(laborCost, net),
@@ -79,12 +121,13 @@ function dailyRows(db, from, to) {
 
 function totalsOf(days) {
   const t = days.reduce((a, d) => {
-    for (const k of ['sales', 'sales_net', 'orders', 'guests', 'discount', 'tips', 'labor_hours', 'labor_cost', 'cancel_count', 'cancel_amount', 'expenses']) a[k] = (a[k] || 0) + (d[k] || 0);
+    for (const k of ['sales', 'sales_net', 'orders', 'guests', 'discount', 'tips', 'labor_hours', 'tip_hours', 'business_hours', 'tip_topup', 'labor_cost', 'cancel_count', 'cancel_amount', 'expenses']) a[k] = (a[k] || 0) + (d[k] || 0);
     return a;
   }, {});
   for (const k of Object.keys(t)) t[k] = r2(t[k]);
   t.avg_ticket = t.orders ? r2(t.sales / t.orders) : 0;
   t.labor_pct = pct(t.labor_cost, t.sales_net);
+  t.tips_per_hour = t.tip_hours ? r2(t.tips / t.tip_hours) : null;
   t.cancel_pct = pct(t.cancel_amount, t.sales);
   t.sales_per_labor_hour = t.labor_hours ? r2(t.sales_net / t.labor_hours) : null;
   t.prime_cost_pct = pct(t.labor_cost + t.expenses, t.sales_net);
@@ -128,6 +171,10 @@ function alerts(db, from, to, days, totals, s) {
     if (d.labor_hours > 0 && d.sales === 0) out.push({ level: 'info', text: `${fmtDate(d.date)}: יש משמרות אבל אין מכירות. אולי חסר קובץ מכירות?` });
     if (d.sales > 0 && d.labor_hours === 0) out.push({ level: 'info', text: `${fmtDate(d.date)}: יש מכירות אבל אין שעות עבודה. אולי חסר קובץ משמרות?` });
   }
+  const topupDays = days.filter(d => d.tip_topup > 0);
+  if (topupDays.length) {
+    out.push({ level: 'warn', text: `ב-${topupDays.length} ימים השעתי היה מתחת לשכר המינימום (${topupDays.map(d => `${fmtDate(d.date)}: ₪${d.tips_per_hour}`).join(', ')}). ההשלמה, ₪${Math.round(totals.tip_topup)}, נכללה בעלות העבודה` });
+  }
   if (cancelAlert && totals.cancel_pct != null && totals.cancel_pct > cancelAlert) {
     out.push({ level: 'warn', text: `הביטולים הם ${totals.cancel_pct}% מהמכירות, מעל סף ההתראה של ${cancelAlert}%` });
   }
@@ -144,21 +191,28 @@ function alerts(db, from, to, days, totals, s) {
 function fmtDate(d) { const [y, m, day] = d.split('-'); return `${day}/${m}`; }
 
 function labor(db, from, to) {
-  const { factor } = ctx(db);
+  const { factor, minWage } = ctx(db);
   const p = { from, to, factor };
-  const byEmployee = db.prepare(`SELECT sh.employee, MAX(COALESCE(sh.role, e.role)) role, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost,
-      MAX(COALESCE(NULLIF(sh.hourly_rate,0), e.hourly_rate)) rate
+  const payType = `CASE WHEN ${IS_TIPS} THEN 'tips' WHEN sh.cost IS NOT NULL THEN 'file' WHEN ${PERSONAL_RATE} IS NOT NULL THEN 'personal' ELSE r.pay_type END`;
+  const byEmployee = db.prepare(`SELECT sh.employee, MAX(${ROLE}) role, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost,
+      MAX(${PERSONAL_RATE}) rate, MAX(${payType}) pay_type, SUM(sh.tips) tips
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to GROUP BY sh.employee ORDER BY hours DESC`).all(p)
-    .map(r => ({ ...r, hours: r2(r.hours), cost: r2(r.cost) }));
-  const byRole = db.prepare(`SELECT COALESCE(sh.role, e.role, 'לא מוגדר') role, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost
+    .map(r => ({ ...r, hours: r2(r.hours), cost: r2(r.cost), tips: r.tips == null ? null : r2(r.tips) }));
+  const byRole = db.prepare(`SELECT COALESCE(${ROLE}, 'לא מוגדר') role, MAX(r.pay_type) pay_type, MAX(r.rate) rate, COUNT(*) shifts, SUM(sh.hours) hours, SUM(${LABOR_COST}) cost
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to GROUP BY 1 ORDER BY cost DESC`).all(p)
     .map(r => ({ ...r, hours: r2(r.hours), cost: r2(r.cost) }));
-  const list = db.prepare(`SELECT sh.date, sh.employee, COALESCE(sh.role, e.role) role, sh.start, sh.end, sh.hours, ${LABOR_COST} cost
+  const list = db.prepare(`SELECT sh.date, sh.employee, ${ROLE} role, sh.start, sh.end, sh.hours, ${LABOR_COST} cost, ${IS_TIPS} AS tip_funded, sh.tips
     ${LABOR_FROM} WHERE sh.date BETWEEN @from AND @to ORDER BY sh.date, sh.start`).all(p)
-    .map(r => ({ ...r, cost: r2(r.cost) }));
-  const missingRates = byEmployee.filter(r => !r.rate && !list.some(l => l.employee === r.employee && l.cost)).map(r => r.employee);
-  const days = dailyRows(db, from, to).map(d => ({ date: d.date, weekday: d.weekday, hours: d.labor_hours, cost: d.labor_cost, staff: d.staff, sales_net: d.sales_net, labor_pct: d.labor_pct, sales_per_labor_hour: d.sales_per_labor_hour }));
-  return { from, to, days, byEmployee, byRole, list, missingRates };
+    .map(r => ({ ...r, cost: r2(r.cost), tip_funded: Boolean(r.tip_funded) }));
+  // roles whose shifts have no way to compute a cost yet
+  const missingRates = db.prepare(`SELECT DISTINCT COALESCE(${ROLE}, 'ללא תפקיד') role ${LABOR_FROM}
+    WHERE sh.date BETWEEN @from AND @to AND ${NO_RATE}`).all(p).map(r => r.role);
+  const days = dailyRows(db, from, to).map(d => ({
+    date: d.date, weekday: d.weekday, hours: d.labor_hours, business_hours: d.business_hours, tip_hours: d.tip_hours, tip_staff: d.tip_staff,
+    tips: d.tips, tips_per_hour: d.tips_per_hour, tips_per_hour_source: d.tips_per_hour_source, tip_topup: d.tip_topup, cost: d.labor_cost, staff: d.staff, sales_net: d.sales_net,
+    labor_pct: d.labor_pct, sales_per_labor_hour: d.sales_per_labor_hour
+  }));
+  return { from, to, days, byEmployee, byRole, list, missingRates, minWage: minWage || null };
 }
 
 function cancellations(db, from, to) {
@@ -216,7 +270,7 @@ function forecast(db, fromDate) {
     const avg = ds.length ? ds.reduce((a, d) => a + d.sales, 0) / ds.length : 0;
     const splh = ds.filter(d => d.sales_per_labor_hour).map(d => d.sales_per_labor_hour);
     const avgSplh = splh.length ? splh.reduce((a, b) => a + b, 0) / splh.length : null;
-    const costPerHour = ds.filter(d => d.labor_hours).reduce((a, d) => a + d.labor_cost / d.labor_hours, 0) / (ds.filter(d => d.labor_hours).length || 1);
+    const costPerHour = ds.filter(d => d.business_hours).reduce((a, d) => a + d.labor_cost / d.business_hours, 0) / (ds.filter(d => d.business_hours).length || 1);
     const budget = (avg / (1 + vat)) * target / 100;
     return {
       date, weekday: DAY_NAMES[weekday(date)], samples: ds.length,

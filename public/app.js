@@ -120,7 +120,7 @@ views.dashboard = {
         ${kpi('שעות עבודה', t.labor_hours, { prev: p.labor_hours, fmt: num, inverse: true })}
         ${kpi('עלות עבודה', t.labor_cost, { prev: p.labor_cost, inverse: true })}
         ${kpi(`עלות עבודה מהמכירות${laborTarget ? ` (יעד ${laborTarget}%)` : ''}`, t.labor_pct, { prev: p.labor_pct, fmt: pctf, inverse: true })}
-        ${kpi('מכירות נטו לשעת עבודה', t.sales_per_labor_hour, { prev: p.sales_per_labor_hour })}
+        ${kpi('שעתי ממוצע (טיפ לשעה)', t.tips_per_hour, { prev: p.tips_per_hour })}
         ${kpi('ביטולים', t.cancel_amount, { prev: p.cancel_amount, inverse: true })}
       </div>
       <div class="grid two" style="margin-top:16px">
@@ -135,9 +135,9 @@ views.dashboard = {
           { key: 'orders', label: 'הזמנות', fmt: num },
           { key: 'avg_ticket', label: 'ממוצע', fmt: money },
           { key: 'labor_hours', label: 'שעות', fmt: num },
+          { key: 'tips_per_hour', label: 'שעתי', fmt: money },
           { key: 'labor_cost', label: 'עלות עבודה', fmt: money },
           { key: 'labor_pct', label: '% עבודה', fmt: pctf, cls: v => (laborTarget && v > laborTarget ? 'bad' : '') },
-          { key: 'sales_per_labor_hour', label: 'מכירות/שעה', fmt: money },
           { key: 'cancel_count', label: 'ביטולים', fmt: num },
           { key: 'cancel_amount', label: '₪ ביטולים', fmt: money }
         ], d.days, { foot: { ...t, weekday: 'סה״כ', date: '', avg_ticket: t.avg_ticket } })}
@@ -227,27 +227,40 @@ views.labor = {
   async render(el) {
     const d = await api(`/api/reports/labor?${q()}`);
     if (!d.list.length) { el.innerHTML = noData('משמרות'); return; }
-    const tot = d.days.reduce((a, x) => ({ hours: a.hours + x.hours, cost: a.cost + x.cost, sales_net: a.sales_net + x.sales_net }), { hours: 0, cost: 0, sales_net: 0 });
+    const tot = d.days.reduce((a, x) => ({ hours: a.hours + x.hours, business_hours: a.business_hours + x.business_hours, tip_hours: a.tip_hours + x.tip_hours, tips: a.tips + x.tips, topup: a.topup + x.tip_topup, cost: a.cost + x.cost, sales_net: a.sales_net + x.sales_net }), { hours: 0, business_hours: 0, tip_hours: 0, tips: 0, topup: 0, cost: 0, sales_net: 0 });
+    const tphDays = d.days.filter(x => x.tips_per_hour != null);
+    const avgTph = tot.tip_hours && tphDays.length ? tphDays.reduce((a, x) => a + x.tips_per_hour * x.tip_hours, 0) / tphDays.reduce((a, x) => a + x.tip_hours, 0) : null;
+    const tphCell = (v, r) => (v == null ? '-' : `${esc(money(v))}${r.tips_per_hour_source === 'calculated' ? ' <span class="muted" title="חושב מהטיפים בדוח המכירות, כי אין שעתי מאפליקציית המשמרות">*</span>' : ''}`);
     el.innerHTML = `
-      ${d.missingRates.length ? `<div class="alert warn" style="margin-bottom:16px">לעובדים הבאים אין שכר לשעה, ולכן העלות שלהם מחושבת כ-0: ${d.missingRates.map(esc).join(', ')}. <a href="#employees">להגדרת שכר</a></div>` : ''}
+      ${d.missingRates.length ? `<div class="alert warn" style="margin-bottom:16px">לתפקידים הבאים עוד לא הוזנה עלות, ולכן הם מחושבים כ-0: ${d.missingRates.map(esc).join(', ')}. <a href="#employees">להזנת עלויות לפי תפקיד</a></div>` : ''}
+      ${!d.minWage ? '<div class="alert info" style="margin-bottom:16px">כדי לחשב השלמה לשכר מינימום כשהשעתי נמוך, הזינו שכר מינימום לשעה ב<a href="#settings">הגדרות</a>.</div>' : ''}
       <div class="grid kpis">
-        ${kpi('סה״כ שעות', tot.hours, { fmt: num })}
-        ${kpi('עלות עבודה', tot.cost)}
+        ${kpi('עלות עבודה לעסק', tot.cost)}
         ${kpi('% מהמכירות נטו', tot.sales_net ? tot.cost / tot.sales_net * 100 : null, { fmt: pctf })}
-        ${kpi('עלות ממוצעת לשעה', tot.hours ? tot.cost / tot.hours : null)}
+        ${kpi('שעות (בתשלום העסק)', tot.business_hours, { fmt: num })}
+        ${kpi('שעות מלצרים וברמנים', tot.tip_hours, { fmt: num })}
+        ${kpi('שעתי ממוצע', avgTph)}
+        ${kpi('סה״כ טיפים', tot.tips)}
+        ${tot.topup ? kpi('השלמה לשכר מינימום', tot.topup) : ''}
       </div>
       <div class="grid two" style="margin-top:16px">
         <div class="card"><h3>שעות ועלות לפי יום</h3><div class="chart-box"><canvas id="l1"></canvas></div></div>
-        <div class="card"><h3>לפי תפקיד</h3>${table([{ key: 'role', label: 'תפקיד' }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות', fmt: money }], d.byRole)}</div>
+        <div class="card"><h3>לפי תפקיד</h3>${table([{ key: 'role', label: 'תפקיד' }, { key: 'pay_type', label: 'תשלום', fmt: v => ({ tips: 'מטיפים', shift: 'למשמרת', hourly: 'לשעה' }[v] || '-') }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות לעסק', fmt: money }], d.byRole)}</div>
       </div>
       <div class="card" style="margin-top:16px"><h3>שעתי יומי</h3>
-        ${table([{ key: 'weekday', label: 'יום' }, { key: 'date', label: 'תאריך', fmt: dmy }, { key: 'staff', label: 'עובדים', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות', fmt: money }, { key: 'sales_net', label: 'מכירות נטו', fmt: money }, { key: 'labor_pct', label: '% עבודה', fmt: pctf }, { key: 'sales_per_labor_hour', label: 'מכירות/שעה', fmt: money }], d.days, { foot: { weekday: 'סה״כ', hours: tot.hours, cost: tot.cost, sales_net: tot.sales_net } })}
+        ${table([{ key: 'weekday', label: 'יום' }, { key: 'date', label: 'תאריך', fmt: dmy },
+          { key: 'tips_per_hour', label: 'שעתי', html: tphCell, cls: v => (d.minWage && v != null && v < d.minWage ? 'bad' : '') },
+          { key: 'tip_hours', label: 'שעות מלצרים/בר', fmt: num }, { key: 'tips', label: 'טיפים', fmt: money },
+          { key: 'business_hours', label: 'שעות עסק', fmt: num }, { key: 'tip_topup', label: 'השלמה', fmt: v => (v ? money(v) : '-') },
+          { key: 'cost', label: 'עלות לעסק', fmt: money }, { key: 'sales_net', label: 'מכירות נטו', fmt: money }, { key: 'labor_pct', label: '% עבודה', fmt: pctf }],
+          d.days, { foot: { weekday: 'סה״כ', tips_per_hour: avgTph, tip_hours: tot.tip_hours, tips: tot.tips, business_hours: tot.business_hours, tip_topup: tot.topup, cost: tot.cost, sales_net: tot.sales_net } })}
+        <p class="muted" style="font-size:12px;margin-bottom:0">שעתי = טיפים לשעה, כפי שמגיע מאפליקציית המשמרות. * = לא היה שעתי בדוח, ולכן חושב מהטיפים בדוח המכירות.</p>
       </div>
       <div class="card" style="margin-top:16px"><h3>לפי עובד</h3>
-        ${table([{ key: 'employee', label: 'עובד' }, { key: 'role', label: 'תפקיד' }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'rate', label: 'שכר לשעה', fmt: money }, { key: 'cost', label: 'עלות', fmt: money }], d.byEmployee)}
+        ${table([{ key: 'employee', label: 'עובד' }, { key: 'role', label: 'תפקיד' }, { key: 'pay_type', label: 'תשלום', fmt: v => ({ tips: 'מטיפים', shift: 'לפי תפקיד (משמרת)', hourly: 'לפי תפקיד (שעה)', personal: 'שכר אישי', file: 'מהקובץ' }[v] || 'לא הוזן') }, { key: 'shifts', label: 'משמרות', fmt: num }, { key: 'hours', label: 'שעות', fmt: num }, { key: 'cost', label: 'עלות לעסק', fmt: money }], d.byEmployee)}
       </div>
       <div class="card" style="margin-top:16px"><h3>כל המשמרות</h3>
-        ${table([{ key: 'date', label: 'תאריך', fmt: dmy }, { key: 'employee', label: 'עובד' }, { key: 'role', label: 'תפקיד' }, { key: 'start', label: 'כניסה' }, { key: 'end', label: 'יציאה' }, { key: 'hours', label: 'שעות', fmt: num, cls: v => (v > 12 ? 'bad' : '') }, { key: 'cost', label: 'עלות', fmt: money }], d.list)}
+        ${table([{ key: 'date', label: 'תאריך', fmt: dmy }, { key: 'employee', label: 'עובד' }, { key: 'role', label: 'תפקיד' }, { key: 'start', label: 'כניסה' }, { key: 'end', label: 'יציאה' }, { key: 'hours', label: 'שעות', fmt: num, cls: v => (v > 12 ? 'bad' : '') }, { key: 'cost', label: 'עלות לעסק', html: (v, r) => (r.tip_funded ? '<span class="muted">מטיפים</span>' : esc(money(v))) }], d.list)}
       </div>`;
     chart($('#l1'), {
       data: {
@@ -385,7 +398,7 @@ views.import = {
     file.onchange = () => file.files[0] && upload(file.files[0]);
     $('#imp-kind').onchange = () => {
       const k = $('#imp-kind').value;
-      if (k === 'shifts') $('#imp-source').value = 'shift';
+      if (k === 'shifts' || k === 'tips_daily') $('#imp-source').value = 'shift';
     };
 
     $$('[data-del]', el).forEach(b => b.onclick = async () => {
@@ -406,7 +419,7 @@ views.import = {
       fd.append('kind', $('#imp-kind').value);
       try {
         const p = await api('/api/import/preview', { method: 'POST', body: fd });
-        if (p.kind === 'shifts' && $('#imp-source').value !== 'shift' && !$('#imp-kind').value) $('#imp-source').value = 'shift';
+        if ((p.kind === 'shifts' || p.kind === 'tips_daily') && !$('#imp-kind').value) $('#imp-source').value = 'shift';
         showPreview(p, kinds);
       } catch (err) { toast(err.message, 5000); }
     }
@@ -457,7 +470,7 @@ function showPreview(p, kinds) {
         const r = await api('/api/import/commit', { method: 'POST', body: { token: p.token, kind: p.kind, mapping: clean(p.mapping), source: $('#imp-source').value, replace: $('#pv-replace').checked } });
         toast(`יובאו ${r.inserted} שורות (${dmy(r.from)} עד ${dmy(r.to)})${r.removed ? `, הוחלפו ${r.removed} קודמות` : ''}${r.skipped ? `, ${r.skipped} שורות דולגו` : ''}`, 5000);
         setRange(r.from, r.to);
-        location.hash = p.kind === 'shifts' ? '#labor' : p.kind === 'cancellations' ? '#cancellations' : p.kind === 'items' ? '#sales' : '#dashboard';
+        location.hash = p.kind === 'shifts' || p.kind === 'tips_daily' ? '#labor' : p.kind === 'cancellations' ? '#cancellations' : p.kind === 'items' ? '#sales' : '#dashboard';
       } catch (err) { toast(err.message, 5000); }
     };
   };
@@ -484,29 +497,62 @@ views.employees = {
   title: 'עובדים',
   hideRange: true,
   async render(el) {
-    const list = await api('/api/employees');
+    const [list, roles] = await Promise.all([api('/api/employees'), api('/api/roles')]);
+    const PAY = { tips: 'משולם מהטיפים', shift: 'עלות למשמרת', hourly: 'עלות לשעה' };
     el.innerHTML = `
       <div class="card">
+        <h3>תפקידים ועלויות</h3>
+        <p class="muted" style="margin-top:0;font-size:13px">מלצרים וברמנים משולמים מהטיפים, ולכן הם לא נספרים בעלות העבודה של העסק. מה שנספר עבורם הוא רק השלמה לשכר מינימום, אם השעתי יצא נמוך ממנו. לשאר התפקידים מזינים את <b>העלות המלאה לעסק</b>, למשמרת או לשעה. תפקידים נוספים לכאן אוטומטית מדוח המשמרות.</p>
+        ${roles.length ? `<div class="table-wrap"><table class="edit-table"><thead><tr><th>תפקיד</th><th>אופן תשלום</th><th>עלות לעסק (₪)</th><th>משמרות ב-60 יום</th><th></th></tr></thead><tbody>
+          ${roles.map(r => `<tr data-role="${r.id}">
+            <td><b>${esc(r.name)}</b></td>
+            <td><select data-k="pay_type">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${r.pay_type === k ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+            <td><input data-k="rate" type="number" step="0.01" min="0" value="${r.rate ?? ''}" style="width:110px" placeholder="${r.pay_type === 'tips' ? '—' : 'לא הוזן'}" ${r.pay_type === 'tips' ? 'disabled' : ''}></td>
+            <td>${r.shifts_60d}</td>
+            <td><button class="btn small" data-saverole>שמירה</button></td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">אין תפקידים עדיין. הם יתווספו מדוח המשמרות, או הוסיפו ידנית</div>'}
+        <form id="role-add" class="row" style="margin-top:10px">
+          <label>תפקיד חדש <input name="name" required></label>
+          <label>אופן תשלום <select name="pay_type">${Object.entries(PAY).map(([k, v]) => `<option value="${k}" ${k === 'shift' ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+          <label>עלות (₪) <input name="rate" type="number" step="0.01" min="0" style="width:100px"></label>
+          <button class="btn">הוספה</button>
+        </form>
+      </div>
+      <div class="card" style="margin-top:16px">
         <h3>הוספת עובד</h3>
         <form id="emp-add" class="row">
           <label>שם <input name="name" required></label>
           <label>תפקיד <input name="role" list="roles"></label>
-          <label>שכר לשעה (ברוטו) <input name="hourly_rate" type="number" step="0.01" min="0" style="width:120px"></label>
+          <label>שכר אישי לשעה (לא חובה) <input name="hourly_rate" type="number" step="0.01" min="0" style="width:120px"></label>
           <button class="btn primary">הוספה</button>
         </form>
         <datalist id="roles"><option>מלצר/ית</option><option>ברמן/ית</option><option>טבח/ית</option><option>שוטף/ת</option><option>אחראי/ת משמרת</option><option>מארח/ת</option><option>שליח/ה</option></datalist>
-        <p class="muted" style="font-size:13px">עלות מעביד מחושבת כשכר לשעה כפול מקדם עלות המעביד מההגדרות (כרגע ${esc(state.settings.employer_cost_factor || '1.25')}). אם דוח המשמרות כולל עמודת עלות, המערכת משתמשת בה.</p>
+        <p class="muted" style="font-size:13px">בדרך כלל מספיקה העלות לפי תפקיד. שכר אישי לשעה גובר על העלות של התפקיד, ומוכפל במקדם עלות המעביד (כרגע ${esc(state.settings.employer_cost_factor || '1.25')}). לעובדים בתפקיד שמשולם מטיפים לא מחושבת עלות.</p>
       </div>
       <div class="card" style="margin-top:16px">
-        ${list.length ? `<div class="table-wrap"><table><thead><tr><th>שם</th><th>תפקיד</th><th>שכר לשעה</th><th>פעיל</th><th></th></tr></thead><tbody>
+        ${list.length ? `<div class="table-wrap"><table><thead><tr><th>שם</th><th>תפקיד</th><th>שכר אישי לשעה</th><th>פעיל</th><th></th></tr></thead><tbody>
           ${list.map(e => `<tr data-id="${e.id}">
             <td>${esc(e.name)}</td>
             <td><input data-k="role" value="${esc(e.role || '')}" list="roles" style="width:140px"></td>
-            <td><input data-k="hourly_rate" type="number" step="0.01" min="0" value="${e.hourly_rate || ''}" style="width:100px" class="${e.hourly_rate ? '' : 'error'}"></td>
+            <td><input data-k="hourly_rate" type="number" step="0.01" min="0" value="${e.hourly_rate || ''}" style="width:100px" placeholder="לפי תפקיד"></td>
             <td><input data-k="active" type="checkbox" ${e.active ? 'checked' : ''}></td>
             <td><button class="btn small" data-save>שמירה</button> <button class="btn small danger" data-del>מחיקה</button></td>
           </tr>`).join('')}</tbody></table></div>` : '<div class="empty">אין עובדים. הם יתווספו אוטומטית כשתייבאו דוח משמרות</div>'}
       </div>`;
+    $$('tr[data-role]', el).forEach(tr => {
+      const sel = $('[data-k=pay_type]', tr), rate = $('[data-k=rate]', tr);
+      sel.onchange = () => { rate.disabled = sel.value === 'tips'; rate.placeholder = sel.value === 'tips' ? '—' : 'לא הוזן'; };
+      $('[data-saverole]', tr).onclick = async () => {
+        try {
+          await api(`/api/roles/${tr.dataset.role}`, { method: 'PUT', body: { pay_type: sel.value, rate: sel.value === 'tips' ? '' : rate.value } });
+          toast('נשמר');
+        } catch (err) { toast(err.message); }
+      };
+    });
+    $('#role-add').onsubmit = async e => {
+      e.preventDefault();
+      try { await api('/api/roles', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast('נוסף'); render(); } catch (err) { toast(err.message); }
+    };
     $('#emp-add').onsubmit = async e => {
       e.preventDefault();
       try { await api('/api/employees', { method: 'POST', body: Object.fromEntries(new FormData(e.target)) }); toast('נוסף'); render(); } catch (err) { toast(err.message); }
@@ -1003,7 +1049,7 @@ const STATUS_LABELS = {
   duplicate: ['כבר טופל', ''], error: ['שגיאה', 'bad'], running: ['רץ…', '']
 };
 const statusHtml = s => { const [t, c] = STATUS_LABELS[s] || [s, '']; return `<span class="pill ${c}">${esc(t)}</span>`; };
-const kindLabel = k => ({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות' }[k] || k || '');
+const kindLabel = k => ({ sales: 'מכירות', items: 'פריטים', cancellations: 'ביטולים', shifts: 'משמרות', tips_daily: 'שעתי' }[k] || k || '');
 
 function resultsHtml(results) {
   if (!results?.length) return '<span class="muted">לא נמצאו קבצים או טבלאות במייל</span>';
@@ -1146,6 +1192,7 @@ views.settings = {
         ${field('employer_cost_factor', 'מקדם עלות מעביד', 'שכר לשעה כפול המקדם הזה = עלות אמיתית (ביטוח לאומי, פנסיה, הבראה...). מקובל 1.2 עד 1.3')}
         ${field('weekly_sales_target', 'יעד מכירות שבועי (₪)', '0 = ללא יעד')}
         ${field('cancel_alert_percent', 'סף התראה לביטולים (% מהמכירות)', '')}
+        ${field('min_hourly_wage', 'שכר מינימום לשעה (₪)', 'אם השעתי של המלצרים יוצא נמוך מזה, ההפרש נספר כעלות לעסק. ריק = לא לחשב השלמה. כדאי לוודא את הסכום העדכני')}
         <div><button class="btn primary">שמירה</button></div>
       </form>
       <div class="card" style="margin-top:16px;max-width:640px">

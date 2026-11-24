@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const express = require('express');
 const multer = require('multer');
-const { openDb, getSettings } = require('./db');
+const { openDb, getSettings, syncRoles } = require('./db');
 const imp = require('./importers');
 const reports = require('./reports');
 const { buildWorkbook } = require('./export');
@@ -156,6 +156,31 @@ function createApp(db = openDb()) {
     res.json({ ok: true });
   });
 
+  // ---------- roles: how each role is paid ----------
+  const PAY_TYPES = ['tips', 'shift', 'hourly'];
+  app.get('/api/roles', (req, res) => {
+    syncRoles(db);
+    res.json(db.prepare(`SELECT r.*, (SELECT COUNT(*) FROM shifts s LEFT JOIN employees e ON e.name = s.employee
+        WHERE COALESCE(NULLIF(s.role, ''), e.role) = r.name AND s.date >= date('now', '-60 day')) shifts_60d
+      FROM roles r ORDER BY CASE pay_type WHEN 'tips' THEN 0 ELSE 1 END, name`).all());
+  });
+  const saveRole = (req, res) => {
+    const { name, pay_type, rate } = req.body;
+    if (!PAY_TYPES.includes(pay_type)) return res.status(400).json({ error: 'סוג תשלום לא תקין' });
+    const r = rate === '' || rate == null ? null : Number(rate);
+    if (r != null && !(r >= 0)) return res.status(400).json({ error: 'עלות לא תקינה' });
+    if (req.params.id) {
+      db.prepare('UPDATE roles SET pay_type = ?, rate = ? WHERE id = ?').run(pay_type, r, Number(req.params.id));
+    } else {
+      if (!String(name || '').trim()) return res.status(400).json({ error: 'שם תפקיד חובה' });
+      db.prepare('INSERT INTO roles(name, pay_type, rate) VALUES (?,?,?) ON CONFLICT(name) DO UPDATE SET pay_type = excluded.pay_type, rate = excluded.rate')
+        .run(String(name).trim(), pay_type, r);
+    }
+    res.json({ ok: true });
+  };
+  app.post('/api/roles', saveRole);
+  app.put('/api/roles/:id', saveRole);
+
   // ---------- expenses ----------
   app.get('/api/expenses', (req, res) => {
     const [from, to] = range(req);
@@ -262,7 +287,7 @@ function createApp(db = openDb()) {
   // ---------- settings ----------
   app.get('/api/settings', (req, res) => res.json(getSettings(db)));
   app.put('/api/settings', (req, res) => {
-    const allowed = ['business_name', 'vat_percent', 'labor_target_percent', 'employer_cost_factor', 'weekly_sales_target', 'cancel_alert_percent',
+    const allowed = ['business_name', 'vat_percent', 'labor_target_percent', 'employer_cost_factor', 'weekly_sales_target', 'cancel_alert_percent', 'min_hourly_wage',
       'email_enabled', 'email_interval_minutes', 'email_from_filter', 'email_subject_filter', 'email_source', 'email_mailbox', 'email_lookback_days',
       'beecomm_api_enabled', 'beecomm_api_interval_minutes'];
     const up = db.prepare('INSERT INTO settings(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');

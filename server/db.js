@@ -112,6 +112,27 @@ function migrate(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    -- daily tips summary from the shift app (ShiftOrganizer calculates "השעתי" = tips per hour itself)
+    CREATE TABLE IF NOT EXISTS tips_daily (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      import_id INTEGER REFERENCES imports(id) ON DELETE CASCADE,
+      source TEXT NOT NULL,
+      date TEXT NOT NULL,
+      tips_per_hour REAL NOT NULL,
+      tips REAL,
+      hours REAL
+    );
+    CREATE INDEX IF NOT EXISTS idx_tips_daily_date ON tips_daily(date);
+
+    -- how each role is paid. 'tips' = paid from tips (waiters / bartenders), not a business cost;
+    -- 'shift' = fixed cost per shift; 'hourly' = cost per hour. rate is the full cost to the business.
+    CREATE TABLE IF NOT EXISTS roles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      pay_type TEXT NOT NULL DEFAULT 'shift' CHECK (pay_type IN ('tips', 'shift', 'hourly')),
+      rate REAL                               -- NULL = not entered yet
+    );
+
     -- ---------- inventory ----------
     CREATE TABLE IF NOT EXISTS inv_products (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -200,6 +221,7 @@ function migrate(db) {
     week_start: '0',                // 0 = Sunday
     weekly_sales_target: '0',
     cancel_alert_percent: '2',
+    min_hourly_wage: '',            // for the tips top-up; empty = no top-up calculation
     // email connector
     email_enabled: '0',
     email_interval_minutes: '60',
@@ -212,8 +234,25 @@ function migrate(db) {
     beecomm_api_enabled: '0',
     beecomm_api_interval_minutes: '360'
   };
+  // columns added after the first release
+  const hasCol = (table, col) => db.prepare(`PRAGMA table_info(${table})`).all().some(c => c.name === col);
+  if (!hasCol('shifts', 'tips')) db.exec('ALTER TABLE shifts ADD COLUMN tips REAL');
+  if (!hasCol('shifts', 'tips_per_hour')) db.exec('ALTER TABLE shifts ADD COLUMN tips_per_hour REAL');
+  // make sure every role seen in shifts / employees has a row
+  syncRoles(db);
+
   const ins = db.prepare('INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(defaults)) ins.run(k, v);
+}
+
+const TIP_ROLE_RE = /מלצר|ברמן|ברמנ|waiter|waitress|bartend|server/i;
+
+/** Adds missing roles. Waiter / bartender roles default to 'tips'; others wait for a rate. */
+function syncRoles(db) {
+  const names = db.prepare(`SELECT role FROM shifts WHERE role IS NOT NULL AND role <> ''
+    UNION SELECT role FROM employees WHERE role IS NOT NULL AND role <> ''`).all().map(r => r.role);
+  const ins = db.prepare('INSERT OR IGNORE INTO roles(name, pay_type) VALUES (?, ?)');
+  for (const n of names) ins.run(n, TIP_ROLE_RE.test(n) ? 'tips' : 'shift');
 }
 
 function getSettings(db) {
@@ -222,4 +261,4 @@ function getSettings(db) {
   return out;
 }
 
-module.exports = { openDb, getSettings, DATA_DIR };
+module.exports = { openDb, getSettings, syncRoles, DATA_DIR };

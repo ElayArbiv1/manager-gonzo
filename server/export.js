@@ -9,7 +9,9 @@ const HEADERS = {
   cancel_amount: 'סכום ביטולים', cancel_pct: '% ביטולים', expenses: 'הוצאות', employee: 'עובד', role: 'תפקיד',
   shifts: 'משמרות', hours: 'שעות', cost: 'עלות', rate: 'שכר לשעה', start: 'כניסה', end: 'יציאה', item: 'פריט',
   qty: 'כמות', amount: 'סכום', reason: 'סיבה', approved_by: 'אושר ע״י', time: 'שעה', source: 'מקור', count: 'כמות',
-  pct: '%', category: 'קטגוריה'
+  pct: '%', category: 'קטגוריה',
+  tip_hours: 'שעות מלצרים/בר', business_hours: 'שעות עסק', tip_staff: 'מלצרים/בר', tips_per_hour: 'שעתי (טיפ לשעה)',
+  tips_per_hour_source: 'מקור השעתי', tip_topup: 'השלמה למינימום', pay_type: 'אופן תשלום', tip_funded: 'משולם מטיפים'
 };
 
 function addSheet(wb, name, rows, cols) {
