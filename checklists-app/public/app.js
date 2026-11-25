@@ -83,6 +83,16 @@ $$('#range [data-preset]').forEach(b => b.onclick = () => (b.dataset.preset === 
 $('#from').onchange = () => setRange($('#from').value, $('#to').value < $('#from').value ? $('#from').value : $('#to').value);
 $('#to').onchange = () => setRange($('#from').value > $('#to').value ? $('#to').value : $('#from').value, $('#to').value);
 
+// ---------- loading screen ----------
+const SPLASH_MIN_MS = 1200;   // long enough to see it, short enough not to annoy
+const splashStart = performance.now();
+function hideSplash() {
+  const s = document.getElementById('splash');
+  if (!s || s.classList.contains('done')) return;
+  setTimeout(() => s.classList.add('done'), Math.max(0, SPLASH_MIN_MS - (performance.now() - splashStart)));
+}
+setTimeout(hideSplash, 8000);   // never stay stuck on it
+
 // ---------- login ----------
 function showLogin() { $('#shell').classList.add('hidden'); $('#login').classList.remove('hidden'); }
 
@@ -118,4 +128,5 @@ window.addEventListener('DOMContentLoaded', async () => {
     if (cfg.teamCode) $('#code-field').classList.remove('hidden');
   } catch { /* ignore */ }
   try { enter((await api('/api/auth/me')).user); } catch { showLogin(); }
+  hideSplash();
 });

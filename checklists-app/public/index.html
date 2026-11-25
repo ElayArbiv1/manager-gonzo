@@ -14,8 +14,19 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
+  <link rel="preload" href="/splash.jpg" as="image">
 </head>
 <body>
+  <!-- loading screen: shown until the app knows who is signed in -->
+  <div id="splash" class="splash" role="status" aria-label="טוען">
+    <img class="splash-art" src="/splash.jpg" alt="">
+    <div class="splash-shade"></div>
+    <div class="splash-content">
+      <img class="splash-logo" src="/shared/logo.png" alt="Dr. Gonzo">
+      <div class="splash-title">צ'ק ליסטים</div>
+      <div class="splash-spinner" aria-hidden="true"></div>
+    </div>
+  </div>
   <div id="login" class="login hidden">
     <form id="login-form" class="card login-card">
       <img src="/shared/logo.png" alt="Dr. Gonzo" class="brand-logo" style="height:44px;margin:4px auto 0">
