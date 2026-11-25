@@ -1,7 +1,8 @@
 /**
- * Sign-up / sign-in with name + phone. Managers are the phone numbers in MANAGER_PHONES
- * (Netlify environment variable, comma separated); signing in as a manager also needs
- * MANAGER_PIN when it is set. TEAM_CODE (optional) is a code staff need to sign up.
+ * Sign-up / sign-in with name + phone. Owners are the phone numbers in MANAGER_PHONES
+ * (Netlify environment variable, comma separated) and can't be removed from the app;
+ * other managers are added in the app (stored as managers/<phone>). Signing in as any
+ * manager also needs MANAGER_PIN when it is set. TEAM_CODE (optional) is a code staff need to sign up.
  * The session is an HMAC-signed cookie; the role is re-checked on every request, so
  * removing a number from MANAGER_PHONES takes effect immediately.
  */
@@ -30,7 +31,14 @@ export function normalizePhone(p) {
 }
 
 const managerPhones = () => new Set(String(process.env.MANAGER_PHONES || '').split(/[,;\n]+/).map(normalizePhone).filter(Boolean));
-export const roleFor = phone => (managerPhones().has(phone) ? 'manager' : 'staff');
+export const isOwner = phone => managerPhones().has(phone);
+export const roleFor = phone => (isOwner(phone) ? 'manager' : 'staff');
+
+/** Role from the settings (owners) and from the managers added in the app. */
+export async function resolveRole(store, phone) {
+  if (isOwner(phone)) return 'manager';
+  return (await store.get(`managers/${phone}`, { type: 'json' })) ? 'manager' : 'staff';
+}
 
 const sign = body => crypto.createHmac('sha256', secret()).update(body).digest('base64url');
 const safeEqual = (a, b) => {
@@ -44,6 +52,7 @@ export function makeCookie(user, secure) {
 }
 export const clearCookie = () => `${COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`;
 
+/** Session from the cookie; the role is resolved by the caller (resolveRole). */
 export function readSession(req) {
   const raw = req.headers.get('cookie') || '';
   const tok = raw.split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
@@ -58,13 +67,13 @@ export function readSession(req) {
 }
 
 /** Validates a sign-up / sign-in request; returns the user record to store. */
-export function checkRegistration({ name, phone, code, pin }) {
+export function checkRegistration({ name, phone, code, pin }, roleOf = roleFor) {
   const n = String(name || '').trim().replace(/\s+/g, ' ');
   if (n.length < 2) throw new HttpError(400, 'צריך למלא שם מלא');
   if (n.length > 60) throw new HttpError(400, 'השם ארוך מדי');
   const ph = normalizePhone(phone);
   if (!ph) throw new HttpError(400, 'מספר הטלפון לא תקין');
-  const role = roleFor(ph);
+  const role = roleOf(ph);
   if (role === 'manager') {
     if (process.env.MANAGER_PIN && !safeEqual(String(pin || ''), process.env.MANAGER_PIN)) {
       throw new HttpError(401, pin ? 'קוד המנהל שגוי' : 'זה מספר של מנהל. צריך להזין קוד מנהל', { need: 'pin' });

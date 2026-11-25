@@ -116,3 +116,33 @@ test('health, and managers can remove staff (not themselves)', async () => {
   // the function's own path works as well as /api/*
   assert.equal((await m('GET', '/.netlify/functions/api/auth/me')).body.user.role, 'manager');
 });
+
+test('managers can promote staff to manager and back; owners are fixed', async () => {
+  const owner = client(), s = client(), other = client();
+  await owner('POST', '/api/auth/register', { name: 'בעלים', phone: '0501112222', pin: '2468' });
+  await s('POST', '/api/auth/register', { name: 'נועה', phone: '0547770001', code: 'gonzo' });
+  await other('POST', '/api/auth/register', { name: 'רון', phone: '0547770002', code: 'gonzo' });
+
+  assert.equal((await s('PUT', '/api/users/0547770002/role', { role: 'manager' })).status, 403);   // staff can't
+  assert.equal((await owner('PUT', '/api/users/0547770001/role', { role: 'manager' })).body.role, 'manager');
+  // takes effect on her current session right away
+  assert.equal((await s('GET', '/api/auth/me')).body.user.role, 'manager');
+  assert.equal((await s('GET', '/api/users')).status, 200);
+  // a promoted manager needs the PIN next time she signs in
+  const again = client();
+  assert.equal((await again('POST', '/api/auth/register', { name: 'נועה', phone: '0547770001', code: 'gonzo' })).body.need, 'pin');
+  assert.equal((await again('POST', '/api/auth/register', { name: 'נועה', phone: '0547770001', pin: '2468' })).body.user.role, 'manager');
+
+  // she can't touch the owner, herself, or delete a manager
+  assert.equal((await s('PUT', '/api/users/0501112222/role', { role: 'staff' })).status, 400);
+  assert.equal((await s('PUT', '/api/users/0547770001/role', { role: 'staff' })).status, 400);
+  assert.equal((await owner('DELETE', '/api/users/0547770001')).status, 400);
+  const list = (await owner('GET', '/api/users')).body;
+  const mine = ['0501112222', '0547770001', '0547770002'];
+  assert.deepEqual(list.filter(u => mine.includes(u.phone)).map(u => [u.name, u.role, Boolean(u.owner)]).sort(),
+    [['בעלים', 'manager', true], ['נועה', 'manager', false], ['רון', 'staff', false]]);
+
+  assert.equal((await owner('PUT', '/api/users/0547770001/role', { role: 'staff' })).status, 200);
+  assert.equal((await s('GET', '/api/auth/me')).body.user.role, 'staff');
+  assert.equal((await owner('PUT', '/api/users/0549999999/role', { role: 'manager' })).status, 404);   // not registered
+});

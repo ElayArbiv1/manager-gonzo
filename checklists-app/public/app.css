@@ -3,7 +3,6 @@
 .app-top { display: flex; justify-content: space-between; align-items: center; padding: 14px 4px; position: sticky; top: 0; background: var(--bg); z-index: 3; }
 .app-shell .range { margin: 0 0 12px; }
 .app-shell .cl-head { top: 58px; }
-.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 .login-card .brand { font-size: 20px; }
 @media (max-width: 860px) {
   .app-shell .cl-head { position: static; }

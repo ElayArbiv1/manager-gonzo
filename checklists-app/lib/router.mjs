@@ -1,6 +1,6 @@
 /** All /api/* routes. Works with standard Request/Response (Netlify Functions v2, and the local dev server). */
 import { getStores } from './store.mjs';
-import { HttpError, readSession, checkRegistration, makeCookie, clearCookie, roleFor } from './auth.mjs';
+import { HttpError, readSession, checkRegistration, makeCookie, clearCookie, resolveRole, isOwner, normalizePhone } from './auth.mjs';
 import * as cl from './checklists.mjs';
 
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), {
@@ -37,7 +37,10 @@ async function route(req) {
     return json({ teamCode: Boolean(process.env.TEAM_CODE), managersConfigured: Boolean(process.env.MANAGER_PHONES) });
   }
   if (p === '/api/auth/register' && m === 'POST') {
-    const u = checkRegistration(await body());
+    const data = await body();
+    const ph = normalizePhone(data.phone);
+    const role = ph ? await resolveRole(stores.data, ph) : 'staff';
+    const u = checkRegistration(data, () => role);
     const key = `users/${u.phone}`;
     const prev = await stores.data.get(key, { type: 'json' });
     const now = new Date().toISOString();
@@ -49,6 +52,8 @@ async function route(req) {
 
   const user = readSession(req);
   if (!user) throw new HttpError(401, 'צריך להתחבר');
+  user.role = await resolveRole(stores.data, user.phone);
+  user.owner = isOwner(user.phone);
   const manager = () => { if (user.role !== 'manager') throw new HttpError(403, 'רק למנהלים'); };
 
   if (p === '/api/auth/me' && m === 'GET') return json({ user });
@@ -59,15 +64,33 @@ async function route(req) {
     manager();
     const { blobs } = await stores.data.list({ prefix: 'users/' });
     const users = (await Promise.all(blobs.map(b => stores.data.get(b.key, { type: 'json' })))).filter(Boolean)
-      .map(u => ({ ...u, role: roleFor(u.phone) })).sort((a, b) => a.name.localeCompare(b.name, 'he'));
+      .map(u => ({ ...u, owner: isOwner(u.phone) }));
+    const roles = await Promise.all(users.map(u => resolveRole(stores.data, u.phone)));
+    users.forEach((u, i) => { u.role = roles[i]; });
+    users.sort((a, b) => (a.role === b.role ? 0 : a.role === 'manager' ? -1 : 1) || a.name.localeCompare(b.name, 'he'));
     return json(users);
   }
 
   if ((r = p.match(/^\/api\/users\/(\d+)$/)) && m === 'DELETE') {
     manager();
     if (r[1] === user.phone) throw new HttpError(400, 'אי אפשר למחוק את עצמך');
+    if (await resolveRole(stores.data, r[1]) === 'manager') throw new HttpError(400, 'קודם מורידים את הרשאת המנהל, ואז אפשר להסיר');
     await stores.data.delete(`users/${r[1]}`);
     return json({ ok: true });
+  }
+
+  // managers add / remove other managers (owners from the site settings stay fixed)
+  if ((r = p.match(/^\/api\/users\/(\d+)\/role$/)) && m === 'PUT') {
+    manager();
+    const phone = r[1];
+    const { role } = await body();
+    if (!['manager', 'staff'].includes(role)) throw new HttpError(400, 'הרשאה לא תקינה');
+    if (!(await stores.data.get(`users/${phone}`, { type: 'json' }))) throw new HttpError(404, 'העובד לא רשום');
+    if (isOwner(phone)) throw new HttpError(400, 'זה מנהל ראשי (מוגדר בהגדרות האתר ב-Netlify) ואי אפשר לשנות אותו מכאן');
+    if (phone === user.phone) throw new HttpError(400, 'אי אפשר לשנות את ההרשאה של עצמך');
+    if (role === 'manager') await stores.data.setJSON(`managers/${phone}`, { phone, added_by: user.phone, added_at: new Date().toISOString() });
+    else await stores.data.delete(`managers/${phone}`);
+    return json({ ok: true, role });
   }
 
   // ---- templates ----

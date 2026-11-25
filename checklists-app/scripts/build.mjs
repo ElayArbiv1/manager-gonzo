@@ -7,5 +7,5 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '..', '..');
 const out = path.resolve(here, '..', 'public', 'shared');
 fs.mkdirSync(out, { recursive: true });
-for (const f of ['checklists.js', 'styles.css']) fs.copyFileSync(path.join(root, 'public', f), path.join(out, f));
+for (const f of ['checklists.js', 'styles.css', 'logo.png']) fs.copyFileSync(path.join(root, 'public', f), path.join(out, f));
 console.log('shared files copied to public/shared');

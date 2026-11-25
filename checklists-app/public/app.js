@@ -43,15 +43,23 @@ views['cl-users'] = {
   hideRange: true,
   async render(el) {
     const users = await api('/api/users');
+    const me = window.CL_CONTEXT?.user?.phone;
     el.innerHTML = clTabs('cl-users') + `<div class="card">
-      <p class="muted" style="margin-top:0">כל מי שנרשם לאפליקציה. מנהלים מוגדרים לפי מספר הטלפון בהגדרות האתר ב-Netlify (MANAGER_PHONES).</p>
+      <p class="muted" style="margin-top:0">כל מי שנרשם לאפליקציה. כאן אפשר להפוך עובד למנהל או להוריד הרשאה. "מנהל ראשי" מוגדר בהגדרות האתר ב-Netlify (MANAGER_PHONES), ואי אפשר לשנות אותו מכאן.</p>
       ${table([
         { key: 'name', label: 'שם' }, { key: 'phone', label: 'טלפון', html: v => `<a href="tel:${esc(v)}" dir="ltr">${esc(v)}</a>` },
-        { key: 'role', label: 'הרשאה', html: v => (v === 'manager' ? '<span class="pill good">מנהל</span>' : '<span class="pill">צוות</span>') },
+        { key: 'role', label: 'הרשאה', html: (v, u) => (u.owner ? '<span class="pill good">מנהל ראשי</span>' : v === 'manager' ? '<span class="pill good">מנהל</span>' : '<span class="pill">צוות</span>') },
         { key: 'last_login', label: 'כניסה אחרונה', fmt: v => (v ? new Date(v).toLocaleString('he-IL') : '') },
-        { key: 'phone', label: '', html: (v, u) => (u.role === 'manager' ? '' : `<button class="btn small danger" data-deluser="${esc(v)}">הסרה</button>`) }
+        { key: 'phone', label: '', html: (v, u) => (u.owner || v === me ? ''
+          : u.role === 'manager' ? `<button class="btn small" data-role="staff" data-phone="${esc(v)}">הורדת הרשאת מנהל</button>`
+            : `<button class="btn small" data-role="manager" data-phone="${esc(v)}">הפוך למנהל</button> <button class="btn small danger" data-deluser="${esc(v)}">הסרה</button>`) }
       ], users, { empty: 'עוד אף אחד לא נרשם' })}
-      <p class="muted" style="font-size:12px">הסרה מוחקת את העובד מהרשימה. מי שיש לו את קוד הצוות יכול להירשם שוב, אז כדי לחסום מחליפים את קוד הצוות.</p></div>`;
+      <p class="muted" style="font-size:12px">מנהל חדש נכנס עם הטלפון שלו ועם קוד המנהל, אז צריך למסור לו את הקוד. הסרה מוחקת עובד מהרשימה. מי שיש לו את קוד הצוות יכול להירשם שוב, ולכן כדי לחסום מחליפים את קוד הצוות.</p></div>`;
+    $$('[data-role]', el).forEach(b => b.onclick = async () => {
+      const promote = b.dataset.role === 'manager';
+      if (!confirm(promote ? 'לתת לעובד הרשאות מנהל? הוא יראה את כל הרשימות, את העובדים ואת ניהול הרשימות' : 'להוריד את הרשאת המנהל?')) return;
+      try { await api(`/api/users/${b.dataset.phone}/role`, { method: 'PUT', body: { role: b.dataset.role } }); toast(promote ? 'הרשאת מנהל ניתנה' : 'הרשאת המנהל הוסרה'); render(); } catch (err) { toast(err.message); }
+    });
     $$('[data-deluser]', el).forEach(b => b.onclick = async () => {
       if (!confirm('להסיר את העובד?')) return;
       try { await api(`/api/users/${b.dataset.deluser}`, { method: 'DELETE' }); toast('הוסר'); render(); } catch (err) { toast(err.message); }

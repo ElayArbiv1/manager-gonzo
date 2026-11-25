@@ -5,35 +5,37 @@
   --text: #1f1d1a;
   --muted: #6b665f;
   --border: #e4e0da;
-  --accent: #d9480f;
-  --accent-soft: #fde8dd;
+  --accent: #770287;          /* Dr. Gonzo purple */
+  --accent-soft: #f3e3f5;
+  --on-accent: #ffffff;
+  --brand-muted: #a67592;
   --good: #2b8a3e;
   --bad: #c92a2a;
   --warn-bg: #fff4e0;
   --warn-text: #8a5300;
   --info-bg: #e7f1fb;
   --info-text: #1c4f80;
-  --series-1: #d9480f;
+  --series-1: #770287;
   --series-2: #1c7ed6;
   --series-3: #2b8a3e;
-  --series-4: #ae3ec9;
+  --series-4: #e8590c;
   --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 8px rgba(0,0,0,.04);
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #151412; --surface: #1e1c1a; --surface-2: #272522; --text: #eeeae4; --muted: #a39d94; --border: #34312d;
-    --accent: #ff7a3d; --accent-soft: #3a2418; --good: #51cf66; --bad: #ff6b6b;
+    --accent: #c784d4; --accent-soft: #2c1830; --on-accent: #1f1d1a; --brand-muted: #c9a3bb; --good: #51cf66; --bad: #ff6b6b;
     --warn-bg: #3a2c12; --warn-text: #ffcf7a; --info-bg: #15283b; --info-text: #9cc9f5;
-    --series-1: #ff7a3d; --series-2: #4dabf7; --series-3: #51cf66; --series-4: #da77f2;
+    --series-1: #c784d4; --series-2: #4dabf7; --series-3: #51cf66; --series-4: #ff922b;
     --shadow: none; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #151412; --surface: #1e1c1a; --surface-2: #272522; --text: #eeeae4; --muted: #a39d94; --border: #34312d;
-  --accent: #ff7a3d; --accent-soft: #3a2418; --good: #51cf66; --bad: #ff6b6b;
+  --accent: #c784d4; --accent-soft: #2c1830; --on-accent: #1f1d1a; --brand-muted: #c9a3bb; --good: #51cf66; --bad: #ff6b6b;
   --warn-bg: #3a2c12; --warn-text: #ffcf7a; --info-bg: #15283b; --info-text: #9cc9f5;
-  --series-1: #ff7a3d; --series-2: #4dabf7; --series-3: #51cf66; --series-4: #da77f2;
+  --series-1: #c784d4; --series-2: #4dabf7; --series-3: #51cf66; --series-4: #ff922b;
   --shadow: none; color-scheme: dark;
 }
 
@@ -48,7 +50,11 @@ a { color: var(--accent); }
 .shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100vh; }
 .sidebar { background: var(--surface); border-inline-end: 1px solid var(--border); padding: 20px 12px; display: flex; flex-direction: column; gap: 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; padding: 0 8px; }
-.logo { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: #fff; display: grid; place-items: center; }
+.logo { width: 32px; height: 32px; border-radius: 8px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
+.brand-logo { height: 28px; width: auto; display: block; }
+.brand-sub { color: var(--brand-muted); font-size: 13px; font-weight: 500; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .brand-logo { filter: brightness(0) invert(1); } }
+:root[data-theme="dark"] .brand-logo { filter: brightness(0) invert(1); }
 nav { display: flex; flex-direction: column; gap: 2px; }
 nav a { color: var(--text); text-decoration: none; padding: 9px 12px; border-radius: 8px; }
 nav a:hover { background: var(--surface-2); }
@@ -63,7 +69,7 @@ label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color:
 
 .btn { font: inherit; cursor: pointer; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 14px; border-radius: 8px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 .btn:hover { background: var(--surface-2); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .btn.primary:hover { filter: brightness(1.08); }
 .btn.ghost { border-color: transparent; background: none; color: var(--muted); }
 .btn.small { padding: 5px 10px; font-size: 13px; }
@@ -197,3 +203,5 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .cl-item.late .cl-eta { color: var(--bad); font-weight: 700; }
 .cl-item.late .cl-box { border-color: var(--bad); }
 .cl-min { flex-direction: row; align-items: center; gap: 4px; }
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }

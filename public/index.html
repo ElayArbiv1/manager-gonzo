@@ -7,12 +7,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;700&display=swap">
   <link rel="stylesheet" href="/styles.css">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23d9480f'/><text x='16' y='23' font-size='20' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>G</text></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23770287'/><text x='16' y='23' font-size='20' text-anchor='middle' fill='white' font-family='Arial' font-weight='bold'>G</text></svg>">
 </head>
 <body>
   <div id="login" class="login hidden">
     <form id="login-form" class="card login-card">
-      <h1>Gonzo · ניהול</h1>
+      <img src="/logo.png" alt="Dr. Gonzo" class="brand-logo" style="height:40px;margin:0 auto">
+      <h1 style="text-align:center;font-size:20px">ניהול</h1>
       <label>סיסמה <input type="password" name="password" autocomplete="current-password" required></label>
       <button class="btn primary" type="submit">כניסה</button>
       <p class="error" id="login-error"></p>
@@ -21,7 +22,7 @@
 
   <div id="shell" class="shell hidden">
     <aside class="sidebar">
-      <div class="brand"><span class="logo">G</span><span id="brand-name">Gonzo</span></div>
+      <div class="brand"><img src="/logo.png" alt="Dr. Gonzo" class="brand-logo"><span id="brand-name" class="sr-only">Gonzo</span></div>
       <nav id="nav">
         <a href="#dashboard" data-route="dashboard">📊 לוח בקרה</a>
         <a href="#sales" data-route="sales">💰 מכירות</a>
