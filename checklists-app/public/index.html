@@ -14,12 +14,11 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
-  <link rel="preload" href="/splash.jpg" as="image">
 </head>
 <body>
   <!-- loading screen: shown until the app knows who is signed in -->
   <div id="splash" class="splash" role="status" aria-label="טוען">
-    <img class="splash-art" src="/splash.jpg" alt="">
+    <img class="splash-art" id="splash-art" alt="">
     <div class="splash-shade"></div>
     <div class="splash-content">
       <img class="splash-logo" src="/shared/logo.png" alt="Dr. Gonzo">
@@ -27,6 +26,23 @@
       <div class="splash-spinner" aria-hidden="true"></div>
     </div>
   </div>
+  <!-- random loading-screen picture: the list is generated from public/splash/ at build time -->
+  <script src="/splash/list.js"></script>
+  <script>
+    (function () {
+      var list = window.SPLASH_IMAGES || [];
+      var art = document.getElementById('splash-art');
+      if (!list.length) { art.remove(); return; }
+      var last = null;
+      try { last = localStorage.getItem('gonzo-splash-last'); } catch (e) { /* private mode */ }
+      // pick at random, but not the same picture as last time (when there is a choice)
+      var options = list.length > 1 ? list.filter(function (src) { return src !== last; }) : list;
+      var pick = options[Math.floor(Math.random() * options.length)];
+      try { localStorage.setItem('gonzo-splash-last', pick); } catch (e) { /* ignore */ }
+      art.onerror = function () { art.remove(); };   // a missing file just leaves the dark background
+      art.src = pick;
+    })();
+  </script>
   <div id="login" class="login hidden">
     <form id="login-form" class="card login-card">
       <img src="/shared/logo.png" alt="Dr. Gonzo" class="brand-logo" style="height:44px;margin:4px auto 0">
